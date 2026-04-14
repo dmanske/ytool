@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YTool</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { gray: { 950: '#0a0a0f' } },
+          fontFamily: {
+            sans: ['"Inter"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+          },
+          maxWidth: { '8xl': '88rem' }
+        }
+      }
+    }
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen font-sans antialiased flex">
+
+  <!-- Toast container -->
+  <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="w-7 h-7 bg-red-600 rounded-lg flex items-center justify-center flex-shrink-0">
+        <i data-lucide="play" class="w-3.5 h-3.5 text-white fill-white"></i>
+      </div>
+      <span class="text-white font-semibold text-base tracking-tight">YTool</span>
+    </div>
+
+    <nav class="sidebar-nav">
+      <button onclick="showTab('downloads')" id="tab-btn-downloads" class="nav-btn active">
+        <i data-lucide="download" class="w-4 h-4 flex-shrink-0"></i>
+        <span>Downloads</span>
+      </button>
+      <button onclick="showTab('subscriptions')" id="tab-btn-subscriptions" class="nav-btn">
+        <i data-lucide="users" class="w-4 h-4 flex-shrink-0"></i>
+        <span>Inscrições</span>
+      </button>
+      <button onclick="showTab('playlists')" id="tab-btn-playlists" class="nav-btn">
+        <i data-lucide="list-video" class="w-4 h-4 flex-shrink-0"></i>
+        <span>Playlists</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <button onclick="showTab('config')" id="tab-btn-config" class="nav-btn w-full">
+        <i data-lucide="settings" class="w-4 h-4 flex-shrink-0"></i>
+        <span>Configurações</span>
+      </button>
+      <button onclick="openHelp()" class="nav-btn w-full mt-1">
+        <i data-lucide="help-circle" class="w-4 h-4 flex-shrink-0"></i>
+        <span>Ajuda</span>
+      </button>
+      <button onclick="toggleTheme()" id="theme-toggle-btn" class="nav-btn w-full mt-1">
+        <i data-lucide="sun" class="w-4 h-4 flex-shrink-0" id="theme-icon"></i>
+        <span id="theme-label">Tema claro</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ── Main content ── -->
+  <div class="main-content">
+
+    <!-- ── Downloads Tab ── -->
+    <section id="tab-downloads" class="tab-section">
+      <div class="section-header">
+        <h1 class="section-title">👋 Bem-vindo ao YTool</h1>
+        <p class="section-desc">Baixe vídeos e áudios do YouTube e Instagram, transfira inscrições e playlists entre contas</p>
+      </div>
+
+      <div class="content-grid">
+        <!-- Left: form -->
+        <div class="space-y-5">
+          <form id="download-form" class="space-y-5">
+
+            <div>
+              <label class="field-label">URL do vídeo</label>
+              <div class="flex gap-2">
+                <div class="input flex-1 flex items-center gap-2">
+                  <div class="flex items-center gap-1.5 flex-shrink-0" id="platform-icons">
+                    <svg class="w-4 h-4 text-gray-600" id="icon-yt" viewBox="0 0 24 24" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+                    <svg class="w-4 h-4 text-gray-600" id="icon-ig" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 1 0 0 12.324 6.162 6.162 0 0 0 0-12.324zM12 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm6.406-11.845a1.44 1.44 0 1 0 0 2.881 1.44 1.44 0 0 0 0-2.881z"/></svg>
+                  </div>
+                  <input id="url-input" type="url" required placeholder="Cole a URL do YouTube ou Instagram aqui..."
+                    class="flex-1 bg-transparent border-none outline-none text-inherit placeholder-inherit" style="padding:0; font-size: inherit;" autocomplete="off" />
+                </div>
+                <button type="button" id="inspect-btn" onclick="inspectFormats()"
+                  class="btn-secondary whitespace-nowrap flex items-center gap-2">
+                  <i data-lucide="scan-search" class="w-4 h-4"></i>
+                  Inspecionar
+                </button>
+              </div>
+              <p class="text-xs text-gray-600 mt-1.5 flex items-center gap-1.5">
+                <span>Plataformas suportadas:</span>
+                <span class="platform-tag">YouTube</span>
+                <span class="platform-tag">Instagram (público)</span>
+              </p>
+            </div>
+
+            <!-- Video preview -->
+            <div id="video-preview" class="hidden">
+              <div class="preview-card">
+                <img id="preview-thumb" src="" alt="" class="preview-thumb">
+                <div class="flex-1 min-w-0">
+                  <p id="preview-title" class="text-sm font-semibold text-gray-100 line-clamp-2"></p>
+                  <p id="preview-meta" class="text-xs text-gray-500 mt-1"></p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Formats -->
+            <div id="formats-section" class="hidden">
+              <label class="field-label">Formatos disponíveis</label>
+              <div id="formats-list" class="space-y-1 max-h-56 overflow-y-auto pr-1 scrollbar-thin"></div>
+              <p class="text-xs text-gray-600 mt-2">Selecione um formato acima ou use Qualidade/Formato abaixo.</p>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+              <div>
+                <label class="field-label">Qualidade</label>
+                <select id="quality-select" class="input w-full">
+                  <option value="best">Melhor</option>
+                  <option value="1080p">1080p</option>
+                  <option value="720p">720p</option>
+                  <option value="480p">480p</option>
+                  <option value="360p">360p</option>
+                </select>
+              </div>
+              <div>
+                <label class="field-label">Formato</label>
+                <select id="format-select" class="input w-full">
+                  <option value="mp4">mp4</option>
+                  <option value="webm">webm</option>
+                  <option value="mkv">mkv</option>
+                </select>
+              </div>
+              <div>
+                <label class="field-label">Categoria</label>
+                <select id="category-select" class="input w-full"></select>
+              </div>
+              <div class="flex flex-col justify-end gap-3 pb-1">
+                <label class="flex items-center gap-2.5 text-sm text-gray-400 cursor-pointer select-none">
+                  <input id="audio-only" type="checkbox" class="accent-red-500 w-4 h-4 rounded">
+                  Somente áudio
+                </label>
+                <label class="flex items-center gap-2.5 text-sm text-gray-400 cursor-pointer select-none">
+                  <input id="subtitles" type="checkbox" class="accent-red-500 w-4 h-4 rounded" onchange="toggleSubLangs()">
+                  Legendas
+                </label>
+              </div>
+            </div>
+
+            <div id="sub-langs-row" class="hidden flex items-center gap-3">
+              <label class="field-label whitespace-nowrap mb-0">Idiomas:</label>
+              <input id="sub-langs-input" type="text" value="en,pt" placeholder="en,pt,es" class="input flex-1" />
+              <span class="text-xs text-gray-600 whitespace-nowrap">separados por vírgula</span>
+            </div>
+
+            <button type="submit" id="download-btn" class="btn-primary flex items-center gap-2 text-base px-6 py-2.5">
+              <i data-lucide="download" class="w-4 h-4"></i>
+              Baixar
+            </button>
+          </form>
+
+          <!-- Progress -->
+          <div id="download-progress-section" class="hidden">
+            <div class="progress-card">
+              <div class="flex items-center justify-between">
+                <span id="download-status-text" class="text-sm font-medium text-gray-200">Baixando...</span>
+                <span id="download-percent-text" class="text-sm font-mono text-red-400 font-semibold">0%</span>
+              </div>
+              <div class="progress-track">
+                <div id="download-progress-bar" class="progress-bar progress-glow" style="width:0%"></div>
+              </div>
+              <div id="download-speed-row" class="hidden flex items-center gap-5 text-xs text-gray-500">
+                <span id="download-speed"></span>
+                <span id="download-eta"></span>
+              </div>
+              <pre id="download-log" class="log-box hidden"></pre>
+              <button onclick="toggleLog('download-log')" class="log-toggle-btn">
+                <i data-lucide="terminal" class="w-3.5 h-3.5"></i>
+                <span id="download-log-toggle-label">Ver log</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: history -->
+        <div>
+          <h2 class="field-label mb-4">Downloads recentes</h2>
+          <ul id="download-history" class="space-y-2">
+            <li id="history-empty" class="flex flex-col items-center justify-center py-16 text-gray-700">
+              <i data-lucide="inbox" class="w-10 h-10 mb-3 opacity-30"></i>
+              <span class="text-sm">Nenhum download ainda</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Subscriptions Tab ── -->
+    <section id="tab-subscriptions" class="tab-section" hidden>
+      <div class="section-header">
+        <h1 class="section-title">Inscrições</h1>
+        <p class="section-desc">Exporte, importe ou transfira inscrições entre contas do YouTube</p>
+      </div>
+
+      <div class="space-y-6 max-w-2xl">
+        <div class="grid grid-cols-2 gap-4">
+          <div class="account-card" id="account-card-source">
+            <div class="flex items-center justify-between mb-4">
+              <span class="text-sm font-semibold text-gray-200">Conta de Origem</span>
+              <span id="source-status" class="status-badge status-disconnected">Desconectada</span>
+            </div>
+            <button onclick="connectAccount('source')" class="btn-secondary w-full flex items-center justify-center gap-2">
+              <i data-lucide="log-in" class="w-4 h-4"></i>
+              Conectar com Google
+            </button>
+          </div>
+          <div class="account-card" id="account-card-dest">
+            <div class="flex items-center justify-between mb-4">
+              <span class="text-sm font-semibold text-gray-200">Conta de Destino</span>
+              <span id="dest-status" class="status-badge status-disconnected">Desconectada</span>
+            </div>
+            <button onclick="connectAccount('dest')" class="btn-secondary w-full flex items-center justify-center gap-2">
+              <i data-lucide="log-in" class="w-4 h-4"></i>
+              Conectar com Google
+            </button>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-3">
+          <button id="export-btn" onclick="exportSubscriptions()" class="btn-secondary flex items-center justify-center gap-2">
+            <i data-lucide="file-down" class="w-4 h-4"></i>
+            Exportar → Arquivo
+          </button>
+          <div class="relative">
+            <button id="import-btn" onclick="document.getElementById('import-file').click()"
+              class="btn-secondary w-full flex items-center justify-center gap-2">
+              <i data-lucide="file-up" class="w-4 h-4"></i>
+              Importar Arquivo →
+            </button>
+            <input id="import-file" type="file" accept=".json,.csv" class="hidden" onchange="importSubscriptions()">
+          </div>
+          <button id="transfer-btn" onclick="transferSubscriptions()" class="btn-primary flex items-center justify-center gap-2">
+            <i data-lucide="arrow-right-left" class="w-4 h-4"></i>
+            Transferir A → B
+          </button>
+        </div>
+
+        <div id="sub-progress-section" class="hidden">
+          <div class="progress-card">
+            <div class="flex items-center justify-between">
+              <span id="sub-status-text" class="text-sm font-medium text-gray-200">Processando...</span>
+              <span id="sub-percent-text" class="text-sm font-mono text-red-400"></span>
+            </div>
+            <div class="progress-track">
+              <div id="sub-progress-bar" class="progress-bar progress-glow" style="width:0%"></div>
+            </div>
+            <pre id="sub-log" class="log-box hidden"></pre>
+            <button onclick="toggleLog('sub-log')" class="log-toggle-btn">
+              <i data-lucide="terminal" class="w-3.5 h-3.5"></i>
+              <span id="sub-log-toggle-label">Ver log</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Playlists Tab ── -->
+    <section id="tab-playlists" class="tab-section" hidden>
+      <div class="section-header">
+        <h1 class="section-title">Playlists</h1>
+        <p class="section-desc">Copie playlists públicas e privadas entre contas do YouTube</p>
+      </div>
+
+      <div class="space-y-6 max-w-3xl">
+        <div class="grid grid-cols-2 gap-4">
+          <div class="account-card">
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-semibold text-gray-200">Conta de Origem</span>
+              <span id="pl-source-status" class="status-badge status-disconnected">Desconectada</span>
+            </div>
+          </div>
+          <div class="account-card">
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-semibold text-gray-200">Conta de Destino</span>
+              <span id="pl-dest-status" class="status-badge status-disconnected">Desconectada</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-4">
+          <button id="load-playlists-btn" onclick="loadPlaylists()" class="btn-secondary flex items-center gap-2">
+            <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+            Carregar Playlists da Origem
+          </button>
+          <span id="pl-count" class="text-sm text-gray-600"></span>
+        </div>
+
+        <div id="playlists-container" class="hidden space-y-4">
+          <div class="flex items-center justify-between">
+            <label class="flex items-center gap-2.5 text-sm text-gray-400 cursor-pointer select-none">
+              <input type="checkbox" id="select-all-playlists" class="accent-red-500 w-4 h-4 rounded" onchange="toggleSelectAll()">
+              Selecionar todas
+            </label>
+            <span id="selected-count" class="text-sm text-gray-600">0 selecionadas</span>
+          </div>
+          <div id="playlists-list" class="space-y-2 max-h-[28rem] overflow-y-auto pr-1 scrollbar-thin"></div>
+          <button id="transfer-playlists-btn" onclick="transferPlaylists()" class="btn-primary flex items-center gap-2">
+            <i data-lucide="arrow-right-left" class="w-4 h-4"></i>
+            Transferir Selecionadas → Destino
+          </button>
+        </div>
+
+        <div id="pl-progress-section" class="hidden">
+          <div class="progress-card">
+            <div class="flex items-center justify-between">
+              <span id="pl-status-text" class="text-sm font-medium text-gray-200">Transferindo...</span>
+              <span id="pl-percent-text" class="text-sm font-mono text-red-400"></span>
+            </div>
+            <div>
+              <div class="flex justify-between text-xs text-gray-500 mb-1.5">
+                <span>Playlists</span>
+                <span id="pl-playlist-counter"></span>
+              </div>
+              <div class="progress-track">
+                <div id="pl-playlist-bar" class="bg-gray-500 h-full rounded-full transition-all duration-300" style="width:0%"></div>
+              </div>
+            </div>
+            <div>
+              <div class="flex justify-between text-xs text-gray-500 mb-1.5">
+                <span id="pl-current-playlist-name" class="truncate max-w-xs">—</span>
+                <span id="pl-video-counter"></span>
+              </div>
+              <div class="progress-track">
+                <div id="pl-video-bar" class="progress-bar progress-glow" style="width:0%"></div>
+              </div>
+            </div>
+            <pre id="pl-log" class="log-box hidden"></pre>
+            <button onclick="toggleLog('pl-log')" class="log-toggle-btn">
+              <i data-lucide="terminal" class="w-3.5 h-3.5"></i>
+              <span id="pl-log-toggle-label">Ver log</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Config Tab ── -->
+    <section id="tab-config" class="tab-section" hidden>
+      <div class="section-header">
+        <h1 class="section-title">Configurações</h1>
+        <p class="section-desc">Pasta de downloads, categorias e credenciais do Google</p>
+      </div>
+
+      <div class="space-y-8 max-w-xl">
+        <div>
+          <label class="field-label">Pasta de downloads</label>
+          <div class="flex gap-2">
+            <input id="base-dir-input" type="text" placeholder="~/Downloads/YTool" class="input flex-1" />
+            <button onclick="saveConfig()" class="btn-secondary flex items-center gap-2">
+              <i data-lucide="save" class="w-4 h-4"></i>
+              Salvar
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <label class="field-label mb-3">Categorias</label>
+          <div id="categories-list" class="space-y-2 mb-3"></div>
+          <div class="flex gap-2">
+            <input id="new-category-input" type="text" placeholder="Nova categoria..."
+              class="input flex-1"
+              onkeydown="if(event.key==='Enter'){event.preventDefault();addCategory()}" />
+            <button onclick="addCategory()" class="btn-secondary flex items-center gap-2">
+              <i data-lucide="plus" class="w-4 h-4"></i>
+              Adicionar
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <h3 class="field-label mb-2">Google OAuth</h3>
+          <p class="text-sm text-gray-600 mb-4 leading-relaxed">
+            Necessário para Inscrições e Playlists. Crie as credenciais em
+            <span class="text-gray-400">console.cloud.google.com</span> → APIs &amp; Services → Credentials → OAuth 2.0 Client IDs.
+            Adicione <code class="text-red-400 font-mono text-xs">http://localhost:8000/api/subscriptions/oauth/callback</code> como URI de redirecionamento.
+            Defina <code class="text-red-400 font-mono text-xs">GOOGLE_CLIENT_ID</code> e <code class="text-red-400 font-mono text-xs">GOOGLE_CLIENT_SECRET</code> no arquivo <code class="text-red-400 font-mono text-xs">.env</code>.
+          </p>
+          <div id="google-status" class="text-sm px-4 py-3 rounded-xl bg-gray-900 border border-gray-800 text-gray-500">
+            Verificando...
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div><!-- end main-content -->
+
+  <!-- ── Modal de Ajuda ── -->
+  <div id="help-modal" class="modal-overlay hidden" onclick="closeHelpOnOverlay(event)">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h2 class="modal-title">
+          <i data-lucide="help-circle" class="w-5 h-5 text-red-500"></i>
+          Como usar o YTool
+        </h2>
+        <button onclick="closeHelp()" class="modal-close">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <div class="modal-body">
+
+        <!-- Downloads -->
+        <div class="help-section">
+          <div class="help-section-icon">
+            <i data-lucide="download" class="w-4 h-4 text-red-400"></i>
+          </div>
+          <div>
+            <h3 class="help-section-title">Downloads</h3>
+            <p class="help-text">Baixe vídeos e áudios do <strong>YouTube</strong> e <strong>Instagram</strong> (apenas conteúdo público).</p>
+            <ol class="help-steps">
+              <li>Cole a URL do vídeo no campo de URL — o app detecta automaticamente se há uma URL do YouTube ou Instagram no seu clipboard.</li>
+              <li>Clique em <strong>Inspecionar</strong> para ver os formatos disponíveis e uma prévia do vídeo (título, duração, canal).</li>
+              <li>Escolha a qualidade, formato e categoria desejados.</li>
+              <li>Marque <strong>Somente áudio</strong> para baixar apenas o áudio em mp3/m4a.</li>
+              <li>Marque <strong>Legendas</strong> e informe os idiomas (ex: <code>en,pt</code>) para baixar legendas junto.</li>
+              <li>Clique em <strong>Baixar</strong> e acompanhe o progresso em tempo real.</li>
+            </ol>
+            <div class="help-tip">
+              <i data-lucide="lightbulb" class="w-3.5 h-3.5 flex-shrink-0 mt-0.5"></i>
+              <span>Os arquivos são salvos em <code>~/Downloads/YTool/{plataforma}/{categoria}/</code> por padrão. Você pode mudar a pasta em Configurações.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="help-divider"></div>
+
+        <!-- Inscrições -->
+        <div class="help-section">
+          <div class="help-section-icon">
+            <i data-lucide="users" class="w-4 h-4 text-red-400"></i>
+          </div>
+          <div>
+            <h3 class="help-section-title">Inscrições</h3>
+            <p class="help-text">Exporte, importe ou transfira suas inscrições (canais seguidos) entre contas do YouTube.</p>
+            <ol class="help-steps">
+              <li>Conecte a <strong>Conta de Origem</strong> (de onde vêm as inscrições) clicando em "Conectar com Google".</li>
+              <li>Conecte a <strong>Conta de Destino</strong> (para onde vão as inscrições) da mesma forma.</li>
+              <li>Use <strong>Exportar → Arquivo</strong> para salvar as inscrições da conta de origem em JSON.</li>
+              <li>Use <strong>Importar Arquivo →</strong> para carregar um JSON/CSV e inscrever a conta de destino nos canais.</li>
+              <li>Use <strong>Transferir A → B</strong> para copiar diretamente da origem para o destino sem arquivo intermediário.</li>
+            </ol>
+            <div class="help-tip">
+              <i data-lucide="clock" class="w-3.5 h-3.5 flex-shrink-0 mt-0.5"></i>
+              <span>A transferência respeita o limite da API do YouTube (~1 inscrição por segundo). Para 500 canais, leva cerca de 8 minutos.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="help-divider"></div>
+
+        <!-- Playlists -->
+        <div class="help-section">
+          <div class="help-section-icon">
+            <i data-lucide="list-video" class="w-4 h-4 text-red-400"></i>
+          </div>
+          <div>
+            <h3 class="help-section-title">Playlists</h3>
+            <p class="help-text">Copie playlists (públicas e privadas) de uma conta do YouTube para outra.</p>
+            <ol class="help-steps">
+              <li>Certifique-se de que as contas de Origem e Destino estão conectadas (faça isso na aba Inscrições).</li>
+              <li>Clique em <strong>Carregar Playlists da Origem</strong> para listar todas as playlists da conta de origem.</li>
+              <li>Selecione as playlists que deseja copiar usando os checkboxes. Use "Selecionar todas" para marcar tudo.</li>
+              <li>Clique em <strong>Transferir Selecionadas → Destino</strong> e acompanhe o progresso.</li>
+            </ol>
+            <div class="help-tip">
+              <i data-lucide="lock" class="w-3.5 h-3.5 flex-shrink-0 mt-0.5"></i>
+              <span>Playlists privadas são recriadas como privadas na conta de destino. Playlists públicas são recriadas como públicas.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="help-divider"></div>
+
+        <!-- Config -->
+        <div class="help-section">
+          <div class="help-section-icon">
+            <i data-lucide="settings" class="w-4 h-4 text-red-400"></i>
+          </div>
+          <div>
+            <h3 class="help-section-title">Configurações</h3>
+            <p class="help-text">Personalize o comportamento do app.</p>
+            <ul class="help-list">
+              <li><strong>Pasta de downloads:</strong> onde os arquivos são salvos. Padrão: <code>~/Downloads/YTool</code>.</li>
+              <li><strong>Categorias:</strong> organize seus downloads em pastas por categoria (ex: Música, Tutoriais).</li>
+              <li><strong>Google OAuth:</strong> credenciais necessárias para usar Inscrições e Playlists. Crie em <code>console.cloud.google.com</code> e adicione ao arquivo <code>.env</code>.</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="help-divider"></div>
+
+        <!-- Limitações -->
+        <div class="help-section">
+          <div class="help-section-icon">
+            <i data-lucide="alert-triangle" class="w-4 h-4 text-yellow-500"></i>
+          </div>
+          <div>
+            <h3 class="help-section-title">Limitações conhecidas</h3>
+            <ul class="help-list">
+              <li><strong>Instagram:</strong> apenas conteúdo público (posts, reels, stories de contas públicas). Contas privadas não são suportadas.</li>
+              <li><strong>YouTube:</strong> downloads de vídeos com DRM ou restrição de idade podem falhar.</li>
+              <li><strong>Playlists:</strong> vídeos removidos ou privados na conta de origem não são copiados.</li>
+            </ul>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
