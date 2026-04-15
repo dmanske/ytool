@@ -45,8 +45,9 @@ uv run ruff format .
 routers/        # HTTP layer only — no business logic here
 services/       # All business logic
   ytdlp_service.py    # Calls yt-dlp via asyncio.subprocess, streams SSE progress
-  youtube_auth.py     # OAuth flow + subscription list/subscribe operations
-static/         # Single-page UI with three tabs: Downloads, Subscriptions, Config
+  youtube_auth.py     # OAuth flow + subscription/playlist operations
+  history_service.py  # Persistent download history (~/.ytool/history.json)
+static/         # Single-page UI with four tabs: Downloads, Subscriptions, Playlists, Config
 config.py       # Base download dir, saved categories, credential paths
 ```
 
@@ -62,11 +63,20 @@ config.py       # Base download dir, saved categories, credential paths
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/download` | Start download (streams SSE progress) |
+| POST | `/api/download/cancel` | Cancel a running download by ID |
+| GET | `/api/formats` | Inspect available formats for a URL |
+| GET | `/api/thumbnail` | Proxy thumbnail image (avoids CORS) |
+| GET | `/api/history` | Get persistent download history |
 | GET | `/api/subscriptions/export` | Export subscriptions as JSON or CSV |
 | POST | `/api/subscriptions/import` | Import subscriptions from file (streams SSE) |
 | POST | `/api/subscriptions/transfer` | Transfer directly between two accounts (streams SSE) |
+| GET | `/api/subscriptions/playlists` | List playlists from source account |
+| POST | `/api/subscriptions/playlists/transfer` | Transfer selected playlists (streams SSE) |
+| GET | `/api/config` | Get current configuration |
+| POST | `/api/config` | Update configuration |
+| POST | `/api/config/open-folder` | Open folder in Finder |
 
-`DownloadRequest` fields: `url`, `quality` (best/1080p/720p/480p/360p), `format` (mp4/webm/mkv), `audio_only`, `category`.
+`DownloadRequest` fields: `url`, `quality` (best/1080p/720p/480p/360p), `format` (mp4/webm/mkv), `audio_only`, `category`, `filename`, `download_id`, `trim_start`, `trim_end`, `subtitles`, `sub_langs`.
 
 ## Environment
 

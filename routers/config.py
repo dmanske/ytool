@@ -41,14 +41,14 @@ async def update_config(body: ConfigUpdate):
     }
 
 
-@router.post("/open-folder")
-async def open_folder(body: dict):
-    """Open a folder in the system file manager (macOS Finder)."""
-    raw = body.get("path", "")
-    if not raw:
-        return JSONResponse({"error": "path is required"}, status_code=400)
+class OpenFolderRequest(BaseModel):
+    path: str
 
-    folder = Path(raw).expanduser().resolve()
+
+@router.post("/open-folder")
+async def open_folder(body: OpenFolderRequest):
+    """Open a folder in the system file manager (macOS Finder)."""
+    folder = Path(body.path).expanduser().resolve()
 
     if not folder.exists():
         # Maybe a file path was passed — try the parent

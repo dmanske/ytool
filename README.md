@@ -11,12 +11,21 @@ Aplicação web local para download de vídeos/áudios do YouTube e Instagram, e
 ### Downloads
 - Baixa vídeos e áudios do **YouTube** e **Instagram** (conteúdo público)
 - Inspeção de formatos disponíveis antes do download
+- **Player do YouTube embutido** — assista o vídeo e marque visualmente o trecho pra cortar
+- **Cortar trecho** — defina início e fim pra baixar apenas uma parte do vídeo
+- **Fila de downloads** — adicione várias URLs e baixe em sequência
+- **Cancelar download** em andamento a qualquer momento
+- **Nome personalizado** do arquivo antes de baixar
+- **Arrastar e soltar** URL do navegador direto no campo
+- **Auto-paste** do clipboard ao focar no campo de URL
 - Seleção de qualidade (4K, 1080p, 720p, 480p, 360p), formato (mp4, webm, mkv) e categoria
 - Modo somente áudio (extrai MP3)
 - Download de legendas com seleção de idiomas
-- Progresso em tempo real via SSE (Server-Sent Events)
-- Organização automática por plataforma e categoria
+- Progresso em tempo real com velocidade, ETA e tamanho do arquivo
+- **Histórico persistente** — salvo entre sessões (~/.ytool/history.json)
+- Clique no histórico pra **abrir a pasta no Finder**
 - Notificação nativa ao concluir
+- Organização automática por plataforma e categoria
 
 ### Inscrições YouTube
 - **Exportar** inscrições de uma conta para JSON/CSV
@@ -32,7 +41,7 @@ Aplicação web local para download de vídeos/áudios do YouTube e Instagram, e
 
 ## Screenshots
 
-A interface possui tema escuro (padrão) e claro, com sidebar de navegação e quatro seções: Downloads, Inscrições, Playlists e Configurações.
+A interface possui tema escuro (padrão) e claro, com sidebar lateral de navegação e quatro seções: Downloads, Inscrições, Playlists e Configurações. Layout otimizado para telas grandes (27"+) com grid de duas colunas na aba de Downloads. Interface 100% em português brasileiro.
 
 ## Requisitos
 
@@ -101,15 +110,16 @@ ytool/
 ├── pyproject.toml           # Dependências e metadata
 ├── YTool.command            # Launcher macOS (duplo clique)
 ├── routers/
-│   ├── downloader.py        # Endpoints de download
+│   ├── downloader.py        # Endpoints de download, cancelamento e histórico
 │   ├── subscriptions.py     # Endpoints de inscrições e playlists
-│   └── config.py            # Endpoints de configuração
+│   └── config.py            # Endpoints de configuração e abrir pasta
 ├── services/
-│   ├── ytdlp_service.py     # Lógica de download via yt-dlp
-│   └── youtube_auth.py      # OAuth + operações YouTube API
+│   ├── ytdlp_service.py     # Lógica de download via yt-dlp (com trim e cancel)
+│   ├── youtube_auth.py      # OAuth + operações YouTube API (subs + playlists)
+│   └── history_service.py   # Histórico persistente de downloads
 └── static/
-    ├── index.html           # SPA com 4 abas
-    ├── app.js               # Lógica do frontend
+    ├── index.html           # SPA com 4 abas + modal de ajuda + player YouTube
+    ├── app.js               # Lógica do frontend (fila, drag-drop, player, tema)
     └── style.css            # Estilos + tema claro/escuro
 ```
 
@@ -118,7 +128,10 @@ ytool/
 | Método | Rota | Descrição |
 |--------|------|-----------|
 | `GET` | `/api/formats?url=` | Inspeciona formatos disponíveis |
+| `GET` | `/api/thumbnail?url=` | Proxy de thumbnail (evita CORS) |
+| `GET` | `/api/history` | Histórico persistente de downloads |
 | `POST` | `/api/download` | Inicia download (SSE) |
+| `POST` | `/api/download/cancel` | Cancela download em andamento |
 | `GET` | `/api/subscriptions/export` | Exporta inscrições (JSON/CSV) |
 | `POST` | `/api/subscriptions/import` | Importa inscrições de arquivo (SSE) |
 | `POST` | `/api/subscriptions/transfer` | Transfere inscrições entre contas (SSE) |
@@ -126,6 +139,7 @@ ytool/
 | `POST` | `/api/subscriptions/playlists/transfer` | Copia playlists entre contas (SSE) |
 | `GET` | `/api/config` | Retorna configurações atuais |
 | `POST` | `/api/config` | Salva configurações |
+| `POST` | `/api/config/open-folder` | Abre pasta no Finder (macOS) |
 
 ## Desenvolvimento
 

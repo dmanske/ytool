@@ -6,6 +6,9 @@ from typing import AsyncGenerator
 
 from config import settings
 
+# Track running download processes for cancellation support
+_active_downloads: dict[str, asyncio.subprocess.Process] = {}
+
 
 def _friendly_vcodec(codec: str) -> str:
     c = codec.lower()
@@ -117,6 +120,8 @@ def build_ytdlp_args(
     sub_langs: str = "en,pt",
     format_kind: str | None = None,
     filename: str = "",
+    trim_start: str | None = None,
+    trim_end: str | None = None,
 ) -> list[str]:
     name = _safe_filename(filename) if filename else "%(title)s"
     output_template = str(output_dir / f"{name}.%(ext)s")
@@ -124,6 +129,12 @@ def build_ytdlp_args(
     # Not applied to Instagram so carousel posts (multiple photos/videos) download fully
     no_playlist = ["--no-playlist"] if "youtube" in url or "youtu.be" in url else []
     args = ["yt-dlp", "--newline", *no_playlist, "-o", output_template]
+
+    # Trim/cut support via --download-sections
+    if trim_start or trim_end:
+        start = trim_start or "0"
+        end = trim_end or "inf"
+        args += ["--download-sections", f"*{start}-{end}"]
 
     if audio_only:
         args += ["-x", "--audio-format", "mp3"]
@@ -173,12 +184,19 @@ async def download_with_progress(
     subtitles: bool = False,
     sub_langs: str = "en,pt",
     filename: str = "",
+    download_id: str = "",
+    trim_start: str | None = None,
+    trim_end: str | None = None,
 ) -> AsyncGenerator[str, None]:
     platform = detect_platform(url)
     output_dir = settings.base_download_dir / platform / category
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    args = build_ytdlp_args(url, quality, fmt, audio_only, output_dir, format_id, subtitles, sub_langs, format_kind, filename)
+    args = build_ytdlp_args(
+        url, quality, fmt, audio_only, output_dir, format_id,
+        subtitles, sub_langs, format_kind, filename,
+        trim_start, trim_end,
+    )
 
     proc = await asyncio.create_subprocess_exec(
         *args,
@@ -186,16 +204,36 @@ async def download_with_progress(
         stderr=asyncio.subprocess.STDOUT,
     )
 
-    async for raw_line in proc.stdout:
-        line = raw_line.decode("utf-8", errors="replace").strip()
-        if not line:
-            continue
-        data = parse_progress_line(line)
-        yield f"data: {json.dumps(data)}\n\n"
+    if download_id:
+        _active_downloads[download_id] = proc
 
-    await proc.wait()
+    try:
+        async for raw_line in proc.stdout:
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            data = parse_progress_line(line)
+            yield f"data: {json.dumps(data)}\n\n"
 
-    if proc.returncode != 0:
-        yield f"data: {json.dumps({'status': 'error', 'message': f'yt-dlp exited with code {proc.returncode}'})}\n\n"
-    else:
-        yield f"data: {json.dumps({'status': 'done', 'output_dir': str(output_dir)})}\n\n"
+        await proc.wait()
+
+        if proc.returncode != 0:
+            yield f"data: {json.dumps({'status': 'error', 'message': f'yt-dlp exited with code {proc.returncode}'})}\n\n"
+        else:
+            yield f"data: {json.dumps({'status': 'done', 'output_dir': str(output_dir)})}\n\n"
+    finally:
+        if download_id:
+            _active_downloads.pop(download_id, None)
+
+
+async def cancel_download(download_id: str) -> bool:
+    """Kill a running download process. Returns True if a process was found and killed."""
+    proc = _active_downloads.pop(download_id, None)
+    if proc is None:
+        return False
+    try:
+        proc.kill()
+        await proc.wait()
+    except ProcessLookupError:
+        pass
+    return True

@@ -206,7 +206,7 @@ async def get_playlists(account_key: str = Query("source")):
 async def transfer_playlists(
     source_key: str = Query("source"),
     dest_key: str = Query("dest"),
-    playlist_ids: list[str] = [],
+    playlist_ids: list[str] | None = None,
 ):
     """Transfer selected playlists from source to dest account, streaming SSE progress."""
 
@@ -223,7 +223,7 @@ async def transfer_playlists(
 
         # Fetch all playlists from source, filter to selected ones
         all_playlists = await asyncio.to_thread(list_playlists, src_creds)
-        selected = [p for p in all_playlists if p["playlist_id"] in playlist_ids] if playlist_ids else all_playlists
+        selected = [p for p in all_playlists if p["playlist_id"] in (playlist_ids or [])] if playlist_ids else all_playlists
 
         if not selected:
             yield f"data: {json.dumps({'status': 'error', 'message': 'No playlists selected or found'})}\n\n"

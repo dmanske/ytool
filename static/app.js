@@ -94,11 +94,36 @@ function toggleLog(logId) {
 const downloadForm = document.getElementById('download-form');
 const downloadBtn = document.getElementById('download-btn');
 let selectedFormatId = null;
+let currentDownloadId = null;
 
 function toggleSubLangs() {
   const checked = document.getElementById('subtitles').checked;
   document.getElementById('sub-langs-row').classList.toggle('hidden', !checked);
 }
+
+function toggleTrim() {
+  const checked = document.getElementById('trim-toggle').checked;
+  document.getElementById('trim-row').classList.toggle('hidden', !checked);
+}
+
+// ── Drag & drop URL ────────────────────────────────────────────────────────────
+
+const dropZone = document.getElementById('drop-zone');
+['dragenter', 'dragover'].forEach(ev => {
+  dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+});
+['dragleave', 'drop'].forEach(ev => {
+  dropZone.addEventListener(ev, () => dropZone.classList.remove('drag-over'));
+});
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  const text = e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text/uri-list');
+  if (text && (text.includes('youtube.com') || text.includes('youtu.be') || text.includes('instagram.com'))) {
+    document.getElementById('url-input').value = text.trim();
+    highlightPlatformIcon(text);
+    inspectFormats();
+  }
+});
 
 // Auto-paste from clipboard on URL field focus
 document.getElementById('url-input').addEventListener('focus', async () => {
@@ -106,15 +131,27 @@ document.getElementById('url-input').addEventListener('focus', async () => {
     const text = await navigator.clipboard.readText();
     const field = document.getElementById('url-input');
     if (!field.value && (text.includes('youtube.com') || text.includes('youtu.be') || text.includes('instagram.com'))) {
-      field.value = text;
+      field.value = text.trim();
       highlightPlatformIcon(text);
+      // Auto-inspecionar
+      inspectFormats();
     }
   } catch (_) {}
 });
 
-// Highlight platform icon on URL input
 document.getElementById('url-input').addEventListener('input', (e) => {
   highlightPlatformIcon(e.target.value);
+});
+
+// Auto-inspecionar ao colar (Ctrl+V / Cmd+V)
+document.getElementById('url-input').addEventListener('paste', (e) => {
+  setTimeout(() => {
+    const val = document.getElementById('url-input').value.trim();
+    if (val && (val.includes('youtube.com') || val.includes('youtu.be') || val.includes('instagram.com'))) {
+      highlightPlatformIcon(val);
+      inspectFormats();
+    }
+  }, 50);
 });
 
 function highlightPlatformIcon(url) {
@@ -124,6 +161,122 @@ function highlightPlatformIcon(url) {
   const isIG = url.includes('instagram.com');
   yt.classList.toggle('active', isYT);
   ig.classList.toggle('active', isIG);
+}
+
+function clearUrlAndPreview() {
+  document.getElementById('url-input').value = '';
+  document.getElementById('video-preview').classList.add('hidden');
+  document.getElementById('formats-section').classList.add('hidden');
+  document.getElementById('player-section').classList.add('hidden');
+  document.getElementById('icon-yt').classList.remove('active');
+  document.getElementById('icon-ig').classList.remove('active');
+  selectedFormatId = null;
+  if (ytPlayer) { ytPlayer.destroy(); ytPlayer = null; }
+}
+
+// ── Download queue ─────────────────────────────────────────────────────────────
+
+let downloadQueue = [];
+let queueRunning = false;
+
+function getFormData() {
+  const previewThumb = document.getElementById('preview-thumb');
+  const thumbUrl = previewThumb && previewThumb.src && !previewThumb.src.endsWith('/') ? previewThumb.src : '';
+  return {
+    url: document.getElementById('url-input').value.trim(),
+    format_id: selectedFormatId || null,
+    quality: document.getElementById('quality-select').value,
+    format: document.getElementById('format-select').value,
+    audio_only: document.getElementById('audio-only').checked,
+    subtitles: document.getElementById('subtitles').checked,
+    sub_langs: document.getElementById('sub-langs-input').value || 'en,pt',
+    category: document.getElementById('category-select').value,
+    filename: document.getElementById('filename-input').value.trim(),
+    thumbnail: thumbUrl,
+    trim_start: document.getElementById('trim-toggle').checked ? document.getElementById('trim-start').value.trim() || null : null,
+    trim_end: document.getElementById('trim-toggle').checked ? document.getElementById('trim-end').value.trim() || null : null,
+  };
+}
+
+function addToQueue() {
+  const data = getFormData();
+  if (!data.url) { showToast('Cole uma URL primeiro', 'info'); return; }
+  downloadQueue.push({ ...data, status: 'pending', id: crypto.randomUUID() });
+  document.getElementById('url-input').value = '';
+  selectedFormatId = null;
+  renderQueue();
+  showToast('Adicionado à fila', 'info', 2000);
+}
+
+function renderQueue() {
+  const section = document.getElementById('queue-section');
+  const list = document.getElementById('queue-list');
+  if (!downloadQueue.length) { section.classList.add('hidden'); return; }
+  section.classList.remove('hidden');
+  list.innerHTML = '';
+  downloadQueue.forEach((item, i) => {
+    const statusClass = `queue-status-${item.status}`;
+    const statusLabel = { pending: 'Pendente', active: 'Baixando', done: 'Concluído', error: 'Erro' }[item.status] || item.status;
+    const li = document.createElement('li');
+    li.className = 'queue-item';
+    li.innerHTML = `
+      <span class="flex-1 truncate text-gray-300">${escHtml(item.url)}</span>
+      <span class="queue-status ${statusClass}">${statusLabel}</span>
+      ${item.status === 'pending' ? `<button onclick="removeFromQueue(${i})" class="text-gray-600 hover:text-red-400 transition-colors"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>` : ''}
+    `;
+    list.appendChild(li);
+  });
+  lucide.createIcons({ nodes: [list] });
+}
+
+function removeFromQueue(index) {
+  downloadQueue.splice(index, 1);
+  renderQueue();
+}
+
+async function startQueue() {
+  if (queueRunning) return;
+  queueRunning = true;
+  document.getElementById('start-queue-btn').disabled = true;
+
+  for (const item of downloadQueue) {
+    if (item.status !== 'pending') continue;
+    item.status = 'active';
+    renderQueue();
+    await runSingleDownload(item);
+    renderQueue();
+  }
+
+  queueRunning = false;
+  document.getElementById('start-queue-btn').disabled = false;
+  downloadQueue = downloadQueue.filter(i => i.status !== 'done');
+  renderQueue();
+  if (!downloadQueue.length) showToast('Fila concluída!', 'success');
+}
+
+// ── Single download ────────────────────────────────────────────────────────────
+
+function runSingleDownload(item) {
+  return new Promise(async (resolve) => {
+    const downloadId = item.id || crypto.randomUUID();
+    currentDownloadId = downloadId;
+    setDownloadUI('active');
+    document.getElementById('cancel-download-btn').classList.remove('hidden');
+
+    await streamPost('/api/download', {
+      ...item,
+      download_id: downloadId,
+    }, (ev) => {
+      handleDownloadEvent(ev);
+      if (ev.status === 'done') { item.status = 'done'; }
+      if (ev.status === 'error') { item.status = 'error'; }
+    });
+
+    currentDownloadId = null;
+    document.getElementById('cancel-download-btn').classList.add('hidden');
+    setDownloadUI('idle');
+    resolve();
+  });
 }
 
 async function inspectFormats() {
@@ -140,6 +293,7 @@ async function inspectFormats() {
     const data = await resp.json();
     renderFormats(data.formats || []);
     renderVideoPreview(data);
+    loadYouTubePlayer(url, data.duration);
   } catch (e) {
     showToast('Não foi possível buscar os formatos: ' + e.message, 'error');
   } finally {
@@ -147,6 +301,52 @@ async function inspectFormats() {
     btn.disabled = false;
     lucide.createIcons({ nodes: [btn] });
   }
+}
+
+// ── YouTube embedded player for trim ───────────────────────────────────────────
+
+let ytPlayer = null;
+let ytPlayerReady = false;
+
+// Called by YouTube IFrame API when ready
+function onYouTubeIframeAPIReady() {
+  // API loaded, player will be created on demand
+}
+
+function extractVideoId(url) {
+  const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+function loadYouTubePlayer(url, duration) {
+  const videoId = extractVideoId(url);
+  const section = document.getElementById('player-section');
+
+  if (!videoId) {
+    section.classList.add('hidden');
+    return;
+  }
+
+  section.classList.remove('hidden');
+
+  // Destroy old player
+  if (ytPlayer) {
+    ytPlayer.destroy();
+    ytPlayer = null;
+  }
+
+  ytPlayerReady = false;
+  ytPlayer = new YT.Player('yt-player', {
+    videoId: videoId,
+    playerVars: {
+      autoplay: 0,
+      modestbranding: 1,
+      rel: 0,
+    },
+    events: {
+      onReady: () => { ytPlayerReady = true; },
+    },
+  });
 }
 
 function renderVideoPreview(data) {
@@ -205,26 +405,28 @@ function renderFormats(formats) {
 downloadForm.addEventListener('submit', async e => {
   e.preventDefault();
 
-  // Pede permissão de notificação aqui — dentro de um evento de usuário (submit)
   if ('Notification' in window && Notification.permission === 'default') {
     await Notification.requestPermission();
   }
 
-  setDownloadUI('active');
+  const data = getFormData();
+  if (!data.url) return;
 
-  await streamPost('/api/download', {
-    url: document.getElementById('url-input').value,
-    format_id: selectedFormatId || null,
-    quality: document.getElementById('quality-select').value,
-    format: document.getElementById('format-select').value,
-    audio_only: document.getElementById('audio-only').checked,
-    subtitles: document.getElementById('subtitles').checked,
-    sub_langs: document.getElementById('sub-langs-input').value || 'en,pt',
-    category: document.getElementById('category-select').value,
-  }, handleDownloadEvent);
-
-  setDownloadUI('idle');
+  const item = { ...data, status: 'active', id: crypto.randomUUID() };
+  await runSingleDownload(item);
 });
+
+async function cancelCurrentDownload() {
+  if (!currentDownloadId) return;
+  try {
+    await fetch('/api/download/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ download_id: currentDownloadId }),
+    });
+    showToast('Download cancelado', 'info');
+  } catch (_) {}
+}
 
 function handleDownloadEvent(ev) {
   const log = document.getElementById('download-log');
@@ -238,10 +440,11 @@ function handleDownloadEvent(ev) {
     bar.style.width = p + '%';
     pct.textContent = p.toFixed(1) + '%';
     statusText.textContent = 'Baixando...';
-    if (ev.speed || ev.eta) {
+    if (ev.speed || ev.eta || ev.total) {
       speedRow.classList.remove('hidden');
       document.getElementById('download-speed').textContent = ev.speed || '';
       document.getElementById('download-eta').textContent = ev.eta ? `ETA ${ev.eta}` : '';
+      document.getElementById('download-total-size').textContent = ev.total || '';
     }
   } else if (ev.status === 'log') {
     appendLog(log, ev.message);
@@ -252,8 +455,6 @@ function handleDownloadEvent(ev) {
     speedRow.classList.add('hidden');
     addHistoryEntry(document.getElementById('url-input').value, ev.output_dir);
     showToast('Download concluído!', 'success');
-    // Notificação nativa — só dispara via interação do usuário (clique no botão Baixar)
-    // já está dentro do fluxo iniciado pelo submit, então é seguro tentar
     if (Notification.permission === 'granted') {
       try { new Notification('YTool', { body: 'Download concluído!' }); } catch (_) {}
     }
@@ -281,15 +482,15 @@ function setDownloadUI(state) {
   }
 }
 
-function addHistoryEntry(url, outputDir) {
+function addHistoryEntry(url, outputDir, savedTitle, savedThumb) {
   const list = document.getElementById('download-history');
   const empty = document.getElementById('history-empty');
   if (empty) empty.remove();
 
   const preview = document.getElementById('preview-thumb');
   const titleEl = document.getElementById('preview-title');
-  const thumbSrc = preview && preview.src ? preview.src : '';
-  const title = titleEl ? titleEl.textContent : url;
+  const thumbSrc = savedThumb || (!savedTitle && preview && preview.src && !preview.src.endsWith('/') ? preview.src : '');
+  const title = savedTitle || (titleEl ? titleEl.textContent : '') || url;
 
   const li = document.createElement('li');
   li.className = 'history-item' + (outputDir ? ' history-item-clickable' : '');
@@ -298,15 +499,29 @@ function addHistoryEntry(url, outputDir) {
     li.addEventListener('click', () => openFolder(outputDir));
   }
   li.innerHTML = `
-    ${thumbSrc ? `<img src="${escHtml(thumbSrc)}" class="w-16 h-10 object-cover rounded-md flex-shrink-0 bg-gray-800">` : ''}
+    ${thumbSrc ? `<img src="${escHtml(thumbSrc)}" class="w-16 h-10 object-cover rounded-md flex-shrink-0 bg-gray-800" onerror="this.style.display='none'">` : ''}
     <div class="flex-1 min-w-0">
-      <div class="text-gray-200 truncate text-sm">${escHtml(title || url)}</div>
+      <div class="text-gray-200 truncate text-sm">${escHtml(title)}</div>
       ${outputDir ? `<div class="text-gray-600 truncate text-xs mt-0.5">${escHtml(outputDir)}</div>` : ''}
     </div>
     ${outputDir ? '<i data-lucide="folder-open" class="w-4 h-4 text-gray-600 flex-shrink-0 folder-icon"></i>' : '<i data-lucide="check-circle" class="w-4 h-4 text-green-600 flex-shrink-0"></i>'}
   `;
-  list.prepend(li);
+  list.appendChild(li);
   lucide.createIcons({ nodes: [li] });
+}
+
+async function clearHistory() {
+  try {
+    await fetch('/api/history', { method: 'DELETE' });
+    const list = document.getElementById('download-history');
+    list.innerHTML = `
+      <li id="history-empty" class="flex flex-col items-center justify-center py-16 text-gray-700">
+        <i data-lucide="inbox" class="w-10 h-10 mb-3 opacity-30"></i>
+        <span class="text-sm">Nenhum download ainda</span>
+      </li>`;
+    lucide.createIcons({ nodes: [list] });
+    showToast('Histórico limpo', 'success', 2000);
+  } catch (_) {}
 }
 
 async function openFolder(path) {
@@ -763,4 +978,19 @@ function handleHelpKey(e) {
   const data = await resp.json();
   _categories = data.categories || [];
   populateCategorySelect(_categories);
+
+  // Carrega histórico persistente
+  try {
+    const hResp = await fetch('/api/history');
+    if (hResp.ok) {
+      const history = await hResp.json();
+      if (history.length) {
+        const empty = document.getElementById('history-empty');
+        if (empty) empty.remove();
+        history.forEach(h => {
+          addHistoryEntry(h.url, h.output_dir, h.title, h.thumbnail);
+        });
+      }
+    }
+  } catch (_) {}
 })();
