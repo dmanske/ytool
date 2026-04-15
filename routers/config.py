@@ -1,4 +1,5 @@
 import asyncio
+import platform
 import subprocess
 from pathlib import Path
 
@@ -59,5 +60,14 @@ async def open_folder(body: OpenFolderRequest):
     if not folder.is_dir():
         folder = folder.parent
 
-    await asyncio.to_thread(subprocess.run, ["open", str(folder)], check=False)
+    # Cross-platform: macOS=open, Windows=explorer, Linux=xdg-open
+    system = platform.system()
+    if system == "Darwin":
+        cmd = ["open", str(folder)]
+    elif system == "Windows":
+        cmd = ["explorer", str(folder)]
+    else:
+        cmd = ["xdg-open", str(folder)]
+
+    await asyncio.to_thread(subprocess.run, cmd, check=False)
     return {"opened": str(folder)}

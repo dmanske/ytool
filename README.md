@@ -5,13 +5,14 @@ Aplicação web local para download de vídeos/áudios do YouTube e Instagram, e
 ![Python 3.12+](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
+![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
 
 ## Funcionalidades
 
 ### Downloads
 - Baixa vídeos e áudios do **YouTube** e **Instagram** (conteúdo público)
-- Inspeção de formatos disponíveis antes do download
-- **Player do YouTube embutido** — assista o vídeo e marque visualmente o trecho pra cortar
+- **Auto-inspecionar** — cola a URL e os formatos são buscados automaticamente
+- **Player do YouTube embutido** — prévia do vídeo direto no app
 - **Cortar trecho** — defina início e fim pra baixar apenas uma parte do vídeo
 - **Fila de downloads** — adicione várias URLs e baixe em sequência
 - **Cancelar download** em andamento a qualquer momento
@@ -22,8 +23,9 @@ Aplicação web local para download de vídeos/áudios do YouTube e Instagram, e
 - Modo somente áudio (extrai MP3)
 - Download de legendas com seleção de idiomas
 - Progresso em tempo real com velocidade, ETA e tamanho do arquivo
-- **Histórico persistente** — salvo entre sessões (~/.ytool/history.json)
-- Clique no histórico pra **abrir a pasta no Finder**
+- **Histórico persistente** com thumbnails — salvo entre sessões
+- Clique no histórico pra **abrir a pasta** no gerenciador de arquivos
+- Botão de **limpar** URL/prévia e histórico
 - Notificação nativa ao concluir
 - Organização automática por plataforma e categoria
 
@@ -31,28 +33,71 @@ Aplicação web local para download de vídeos/áudios do YouTube e Instagram, e
 - **Exportar** inscrições de uma conta para JSON/CSV
 - **Importar** inscrições de um arquivo para outra conta
 - **Transferir** inscrições diretamente entre duas contas
+- Seleção de conta com tela de escolha (não precisa de dois navegadores)
 - Progresso em tempo real com rate limiting automático (~1 req/s)
 
 ### Playlists YouTube
 - Listar todas as playlists (públicas e privadas) de uma conta
-- Copiar playlists selecionadas entre contas
+- Copiar playlists selecionadas entre contas com checkbox
 - Preserva privacidade (playlists privadas são recriadas como privadas)
 - Progresso detalhado por playlist e por vídeo
 
-## Screenshots
-
-A interface possui tema escuro (padrão) e claro, com sidebar lateral de navegação e quatro seções: Downloads, Inscrições, Playlists e Configurações. Layout otimizado para telas grandes (27"+) com grid de duas colunas na aba de Downloads. Interface 100% em português brasileiro.
+### Interface
+- **Tema escuro e claro** com toggle na sidebar
+- Sidebar lateral de navegação com 4 seções
+- Layout otimizado para telas grandes (27"+)
+- Interface 100% em português brasileiro
+- Modal de ajuda com guia completo
+- Ícones do YouTube e Instagram que acendem ao detectar a plataforma
 
 ## Requisitos
 
 - **Python 3.12+**
 - **uv** (gerenciador de pacotes) — [instalação](https://docs.astral.sh/uv/getting-started/installation/)
 - **yt-dlp** (instalado automaticamente via dependências)
-- **ffmpeg** (necessário para merge de áudio/vídeo) — `brew install ffmpeg`
+- **ffmpeg** (necessário para merge de áudio/vídeo)
 
 ## Instalação
 
+### macOS
+
 ```bash
+# Instalar ffmpeg (se não tiver)
+brew install ffmpeg
+
+# Clonar e configurar
+git clone https://github.com/dmanske/ytool.git
+cd ytool
+uv sync
+cp .env.example .env
+```
+
+### Windows
+
+```powershell
+# 1. Instalar Python 3.12+ (se não tiver)
+# Baixe em https://www.python.org/downloads/ — marque "Add to PATH"
+
+# 2. Instalar uv
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# 3. Instalar ffmpeg via winget (ou baixe em https://ffmpeg.org/download.html)
+winget install Gyan.FFmpeg
+
+# 4. Clonar e configurar
+git clone https://github.com/dmanske/ytool.git
+cd ytool
+uv sync
+copy .env.example .env
+```
+
+### Linux
+
+```bash
+# Instalar ffmpeg (Ubuntu/Debian)
+sudo apt install ffmpeg
+
+# Clonar e configurar
 git clone https://github.com/dmanske/ytool.git
 cd ytool
 uv sync
@@ -61,14 +106,31 @@ cp .env.example .env
 
 ## Uso
 
-### Opção 1 — Terminal
+### macOS / Linux — Terminal
 ```bash
 uv run python app.py
 ```
 O app abre automaticamente em `http://localhost:8000`.
 
-### Opção 2 — Duplo clique (macOS)
-Dê duplo clique no arquivo `YTool.command`. Ele instala dependências e inicia o servidor automaticamente.
+### macOS — Duplo clique
+Dê duplo clique no arquivo `YTool.command`. Ele mata processos antigos, instala dependências e inicia o servidor automaticamente.
+
+### Windows — Terminal
+```powershell
+uv run python app.py
+```
+
+### Windows — Duplo clique
+Crie um arquivo `YTool.bat` na pasta do projeto com o conteúdo:
+
+```bat
+@echo off
+cd /d "%~dp0"
+uv sync --quiet
+uv run python app.py
+```
+
+Dê duplo clique no `YTool.bat` pra iniciar.
 
 ## Configuração
 
@@ -80,6 +142,8 @@ GOOGLE_CLIENT_SECRET=    # Necessário para Inscrições e Playlists
 BASE_DOWNLOAD_DIR=~/Downloads/YTool
 ```
 
+> No Windows, use um caminho como `C:\Users\SeuNome\Downloads\YTool`.
+
 ### Google OAuth (opcional)
 
 Necessário apenas para os módulos de Inscrições e Playlists:
@@ -90,6 +154,8 @@ Necessário apenas para os módulos de Inscrições e Playlists:
 4. Adicione `http://localhost:8000/api/subscriptions/oauth/callback` como URI de redirecionamento
 5. Copie o Client ID e Client Secret para o arquivo `.env`
 
+> Você cria as credenciais **uma vez só**, em qualquer conta Google. Depois, conecta as duas contas do YouTube pelo app.
+
 ## Stack
 
 | Componente | Tecnologia |
@@ -97,7 +163,8 @@ Necessário apenas para os módulos de Inscrições e Playlists:
 | Backend | Python 3.12+, FastAPI, uvicorn |
 | Downloads | yt-dlp via asyncio subprocess |
 | Auth | google-auth-oauthlib, google-api-python-client |
-| Frontend | HTML/CSS/JS vanilla + Tailwind CSS (CDN) |
+| Frontend | HTML/CSS/JS vanilla + Tailwind CSS (CDN) + Lucide Icons |
+| Player | YouTube IFrame API |
 | Progresso | Server-Sent Events (SSE) |
 | Dependências | uv + pyproject.toml |
 
@@ -130,6 +197,7 @@ ytool/
 | `GET` | `/api/formats?url=` | Inspeciona formatos disponíveis |
 | `GET` | `/api/thumbnail?url=` | Proxy de thumbnail (evita CORS) |
 | `GET` | `/api/history` | Histórico persistente de downloads |
+| `DELETE` | `/api/history` | Limpa o histórico |
 | `POST` | `/api/download` | Inicia download (SSE) |
 | `POST` | `/api/download/cancel` | Cancela download em andamento |
 | `GET` | `/api/subscriptions/export` | Exporta inscrições (JSON/CSV) |
@@ -139,7 +207,7 @@ ytool/
 | `POST` | `/api/subscriptions/playlists/transfer` | Copia playlists entre contas (SSE) |
 | `GET` | `/api/config` | Retorna configurações atuais |
 | `POST` | `/api/config` | Salva configurações |
-| `POST` | `/api/config/open-folder` | Abre pasta no Finder (macOS) |
+| `POST` | `/api/config/open-folder` | Abre pasta no gerenciador de arquivos |
 
 ## Desenvolvimento
 
@@ -157,10 +225,10 @@ uv run python app.py --no-browser
 
 ## Limitações
 
-- **Instagram:** apenas conteúdo público (posts, reels de contas públicas)
+- **Instagram:** apenas conteúdo público (posts, reels de contas públicas). Contas privadas não são suportadas.
 - **YouTube:** vídeos com DRM ou restrição de idade podem falhar
-- **Playlists:** vídeos removidos ou privados na origem não são copiados
-- Não suporta download de playlists/canais inteiros (apenas vídeos individuais)
+- **Playlists:** vídeos removidos ou privados na conta de origem não são copiados
+- **Windows:** o botão "abrir pasta" usa `explorer` automaticamente no Windows, `open` no macOS e `xdg-open` no Linux.
 
 ## Licença
 
