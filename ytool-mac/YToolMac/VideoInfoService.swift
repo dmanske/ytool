@@ -3,8 +3,8 @@ import Foundation
 struct VideoInfo: Equatable {
     let title: String
     let uploader: String
-    let duration: Int        // seconds
-    let thumbnail: String    // URL string
+    let duration: Int
+    let thumbnail: String
     let formats: [VideoFormat]
 
     var durationFormatted: String {
@@ -41,60 +41,166 @@ struct VideoFormat: Identifiable, Equatable {
 enum VideoInfoError: LocalizedError {
     case ytdlpNotFound
     case fetchFailed(String)
-    case parseError
+    case parseError(String)
 
     var errorDescription: String? {
         switch self {
-        case .ytdlpNotFound:    return "yt-dlp não encontrado"
-        case .fetchFailed(let m): return "Falha ao buscar: \(m)"
-        case .parseError:       return "Erro ao processar resposta"
+        case .ytdlpNotFound:      return "yt-dlp não encontrado. Instale com: brew install yt-dlp"
+        case .fetchFailed(let m): return "Falha: \(m)"
+        case .parseError(let m):  return "Erro ao processar: \(m)"
         }
     }
 }
 
-actor VideoInfoService {
+final class VideoInfoService: Sendable {
     static let shared = VideoInfoService()
 
-    private let ytdlpPaths = [
-        Bundle.main.path(forResource: "yt-dlp", ofType: nil),
-        NSHomeDirectory() + "/bin/yt-dlp",
-        "/opt/homebrew/bin/yt-dlp",
-        "/usr/local/bin/yt-dlp",
-        "/usr/bin/yt-dlp",
-    ]
-
-    func findYtdlp() -> String? {
-        ytdlpPaths.compactMap { $0 }.first {
-            FileManager.default.isExecutableFile(atPath: $0)
+    // Procura yt-dlp: primeiro no bundle do app, depois no sistema
+    private var searchPaths: [String] {
+        var paths: [String] = []
+        // 1. Bundled com o app (YToolMac_YToolMac.bundle/bin/)
+        if let bundleURL = Bundle.main.resourceURL {
+            // Swift Package resources ficam em YToolMac_YToolMac.bundle
+            let bundledPath = bundleURL
+                .appendingPathComponent("YToolMac_YToolMac.bundle")
+                .appendingPathComponent("bin")
+                .appendingPathComponent("yt-dlp")
+            paths.append(bundledPath.path)
+            // Também tenta direto no bundle
+            let directPath = bundleURL
+                .appendingPathComponent("bin")
+                .appendingPathComponent("yt-dlp")
+            paths.append(directPath.path)
         }
+        // 2. Tenta via Bundle.module (Swift Package)
+        if let moduleBundle = Bundle(identifier: "YToolMac.YToolMac") ?? Bundle.allBundles.first(where: { $0.bundlePath.contains("YToolMac_YToolMac") }) {
+            let modulePath = moduleBundle.bundleURL
+                .appendingPathComponent("bin")
+                .appendingPathComponent("yt-dlp")
+            paths.append(modulePath.path)
+        }
+        // 3. Sistema
+        paths.append(contentsOf: [
+            NSHomeDirectory() + "/bin/yt-dlp",
+            "/usr/local/bin/yt-dlp",
+            "/opt/homebrew/bin/yt-dlp",
+        ])
+        return paths
     }
 
-    func fetch(url: String) async throws -> VideoInfo {
-        guard let ytdlp = findYtdlp() else { throw VideoInfoError.ytdlpNotFound }
+    /// Retorna o diretório dos binários bundled (ffmpeg, etc)
+    func bundledBinDir() -> String? {
+        if let bundleURL = Bundle.main.resourceURL {
+            let path1 = bundleURL
+                .appendingPathComponent("YToolMac_YToolMac.bundle")
+                .appendingPathComponent("bin")
+            if FileManager.default.fileExists(atPath: path1.path) { return path1.path }
+            let path2 = bundleURL.appendingPathComponent("bin")
+            if FileManager.default.fileExists(atPath: path2.path) { return path2.path }
+        }
+        if let moduleBundle = Bundle(identifier: "YToolMac.YToolMac") ?? Bundle.allBundles.first(where: { $0.bundlePath.contains("YToolMac_YToolMac") }) {
+            let path = moduleBundle.bundleURL.appendingPathComponent("bin")
+            if FileManager.default.fileExists(atPath: path.path) { return path.path }
+        }
+        return nil
+    }
 
+    func findYtdlp() -> String? {
+        for path in searchPaths {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                print("[VideoInfoService] Found yt-dlp at: \(path)")
+                return path
+            } else {
+                let exists = FileManager.default.fileExists(atPath: path)
+                if exists {
+                    print("[VideoInfoService] Found but not executable: \(path)")
+                } 
+            }
+        }
+        print("[VideoInfoService] Searched paths: \(searchPaths)")
+        // Fallback: try `which`
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: ytdlp)
-        proc.arguments = ["--no-playlist", "-J", url]
-
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        proc.arguments = ["yt-dlp"]
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = Pipe()
-
-        try proc.run()
-        proc.waitUntilExit()
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw VideoInfoError.parseError
-        }
-
-        return parseInfo(json)
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !output.isEmpty && FileManager.default.isExecutableFile(atPath: output) {
+                return output
+            }
+        } catch {}
+        return nil
     }
 
-    private func parseInfo(_ json: [String: Any]) -> VideoInfo {
-        let title    = json["title"]    as? String ?? ""
-        let uploader = json["uploader"] as? String ?? json["channel"] as? String ?? ""
-        let duration = json["duration"] as? Int ?? 0
+    func fetch(url: String, cookieBrowser: String? = nil) async throws -> VideoInfo {
+        guard let ytdlp = findYtdlp() else {
+            throw VideoInfoError.ytdlpNotFound
+        }
+
+        print("[VideoInfoService] Using yt-dlp at: \(ytdlp)")
+        print("[VideoInfoService] Fetching info for: \(url)")
+
+        var arguments = ["--no-playlist", "--remote-components", "ejs:github"]
+        if let browser = cookieBrowser, !browser.isEmpty {
+            arguments += ["--cookies-from-browser", browser]
+            print("[VideoInfoService] Using cookies from: \(browser)")
+        }
+        arguments += ["-J", url]
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: ytdlp)
+        proc.arguments = arguments
+
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = "/usr/local/bin:/opt/homebrew/bin:\(NSHomeDirectory())/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
+        proc.environment = env
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = errPipe
+
+        do {
+            try proc.run()
+            print("[VideoInfoService] pid=\(proc.processIdentifier)")
+        } catch {
+            throw VideoInfoError.fetchFailed(error.localizedDescription)
+        }
+
+        // Run waitUntilExit on a background DispatchQueue — never on main thread
+        let (outData, exitCode): (Data, Int32) = try await withCheckedThrowingContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                proc.waitUntilExit()
+                let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+                cont.resume(returning: (data, proc.terminationStatus))
+            }
+        }
+
+        print("[VideoInfoService] Exit: \(exitCode), bytes: \(outData.count)")
+
+        if exitCode != 0 {
+            let errStr = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            throw VideoInfoError.fetchFailed(String(errStr.prefix(300)))
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: outData) as? [String: Any] else {
+            throw VideoInfoError.parseError("Resposta inválida")
+        }
+
+        let info = Self.parseInfo(json)
+        print("[VideoInfoService] OK: \(info.title) — \(info.formats.count) formatos")
+        return info
+    }
+
+    private static func parseInfo(_ json: [String: Any]) -> VideoInfo {
+        let title     = json["title"]     as? String ?? ""
+        let uploader  = json["uploader"]  as? String ?? json["channel"] as? String ?? ""
+        let duration  = json["duration"]  as? Int ?? Int(json["duration"] as? Double ?? 0)
         let thumbnail = json["thumbnail"] as? String ?? ""
 
         var formats: [VideoFormat] = []
@@ -129,39 +235,55 @@ actor VideoInfoService {
             formats.append(VideoFormat(id: fid, label: label, kind: kind, height: height))
         }
 
-        // Sort: best quality first, audio last
         formats.sort {
             if $0.kind == .audioOnly && $1.kind != .audioOnly { return false }
             if $0.kind != .audioOnly && $1.kind == .audioOnly { return true }
             if $0.height != $1.height { return $0.height > $1.height }
-            let order: [VideoFormat.FormatKind] = [.videoAudio, .videoOnly, .audioOnly]
-            return (order.firstIndex(of: $0.kind) ?? 9) < (order.firstIndex(of: $1.kind) ?? 9)
+            return false
         }
 
         return VideoInfo(title: title, uploader: uploader, duration: duration, thumbnail: thumbnail, formats: formats)
     }
 
-    private func resLabel(_ h: Int) -> String? {
+    private static func resLabel(_ h: Int) -> String? {
         [2160: "4K", 1440: "2K", 1080: "1080p", 720: "720p",
          480: "480p", 360: "360p", 240: "240p", 144: "144p"][h]
     }
 
-    private func friendlyVcodec(_ c: String) -> String {
+    private static func friendlyVcodec(_ c: String) -> String {
         let l = c.lowercased()
         if l.hasPrefix("avc") || l.hasPrefix("h264") { return "H.264" }
         if l.hasPrefix("hvc") || l.hasPrefix("h265") { return "H.265" }
         if l.hasPrefix("av0") || l.hasPrefix("av1")  { return "AV1" }
         if l.hasPrefix("vp9") { return "VP9" }
-        if l.hasPrefix("vp8") { return "VP8" }
         return c.components(separatedBy: ".").first?.uppercased() ?? c
     }
 
-    private func friendlyAcodec(_ c: String) -> String {
+    private static func friendlyAcodec(_ c: String) -> String {
         let l = c.lowercased()
         if l.hasPrefix("mp4a")  { return "AAC" }
         if l.hasPrefix("opus")  { return "Opus" }
         if l.hasPrefix("mp3")   { return "MP3" }
         if l.hasPrefix("vorbis"){ return "Vorbis" }
         return c.components(separatedBy: ".").first?.uppercased() ?? c
+    }
+}
+
+// MARK: - Thread-safe one-shot continuation resumer
+
+private final class OnceResumer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    init(continuation: CheckedContinuation<Bool, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(_ value: Bool) {
+        lock.lock()
+        let cont = continuation
+        continuation = nil
+        lock.unlock()
+        cont?.resume(returning: value)
     }
 }

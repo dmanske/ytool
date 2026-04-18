@@ -7,7 +7,12 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "YToolMac",
-            path: "YToolMac"
+            path: "YToolMac",
+            resources: [
+                .copy("Resources/bin"),
+                .copy("YToolMac.entitlements")
+            ],
+            swiftSettings: []
         ),
     ]
 )

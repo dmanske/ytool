@@ -29,7 +29,10 @@ struct YToolMacApp: App {
         .windowStyle(.titleBar)
         .defaultSize(width: 1200, height: 750)
         .windowResizability(.contentSize)
-        // Não substituímos .textEditing — deixamos o macOS gerenciar Cmd+C/V/X nativamente
+        .commands {
+            // Garante que o menu Edit existe com Cmd+V funcional
+            CommandGroup(after: .pasteboard) { }
+        }
     }
 }
 struct SplashView: View {
