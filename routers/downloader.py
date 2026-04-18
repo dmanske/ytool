@@ -25,9 +25,8 @@ class DownloadRequest(BaseModel):
     sub_langs: str = "en,pt"
     filename: str = ""
     download_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    trim_start: str | None = None
-    trim_end: str | None = None
     thumbnail: str = ""  # thumbnail URL for history
+    cookie_browser: str | None = None  # e.g. "chrome", "firefox" — for member-only content
 
 
 class CancelRequest(BaseModel):
@@ -35,8 +34,8 @@ class CancelRequest(BaseModel):
 
 
 @router.get("/formats")
-async def list_formats(url: str = Query(...)):
-    return await get_formats(url)
+async def list_formats(url: str = Query(...), cookie_browser: str | None = Query(None)):
+    return await get_formats(url, cookie_browser=cookie_browser)
 
 
 @router.get("/thumbnail")
@@ -80,8 +79,7 @@ async def start_download(req: DownloadRequest):
             sub_langs=req.sub_langs,
             filename=req.filename,
             download_id=req.download_id,
-            trim_start=req.trim_start,
-            trim_end=req.trim_end,
+            cookie_browser=req.cookie_browser,
         ):
             # Capture output_dir from the done event for history
             if '"status": "done"' in chunk:

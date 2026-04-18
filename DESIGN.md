@@ -2,129 +2,122 @@
 
 ## Understanding Summary
 
-- **O que:** Aplicação web local com dois módulos — downloader (YouTube + Instagram) e gerenciador de inscrições YouTube
+- **O que:** Aplicação web local com três módulos — downloader (YouTube + Instagram), gerenciador de inscrições YouTube, e migração de playlists
 - **Por que:** Necessidade pessoal com potencial de virar produto público
-- **Para quem:** Uso pessoal no Mac inicialmente, depois distribuição pública
-- **Constraints:** yt-dlp para downloads, OAuth Google para inscrições, interface web no browser
-- **Não-objetivos:** playlists/canais inteiros, monitoramento automático, app desktop
+- **Para quem:** Uso pessoal em macOS/Windows/Linux, depois distribuição pública
+- **Constraints:** yt-dlp para downloads, OAuth Google para inscrições/playlists, interface web no browser
+- **Não-objetivos:** monitoramento automático, app desktop nativo, Instagram privado
 
 ## Premissas
 
 - `yt-dlp` cobre YouTube e Instagram sem API key
-- OAuth Google necessário apenas para o módulo de inscrições
+- OAuth Google necessário apenas para inscrições e playlists
 - Instagram: apenas conteúdo público (evitar violação de ToS)
 - Arquitetura não precisa ser otimizada para escala agora (YAGNI)
 - Tokens OAuth salvos localmente em `~/.ytool/tokens/`
+- Histórico de downloads salvo em `~/.ytool/history.json`
 
 ## Stack
 
 - **Backend:** Python 3.12+, FastAPI, uvicorn
-- **Downloads:** yt-dlp via asyncio subprocess
+- **Downloads:** yt-dlp via asyncio subprocess (com cancel e trim)
 - **Autenticação:** google-auth, google-auth-oauthlib, google-api-python-client
-- **Frontend:** HTML/CSS/JS vanilla + Tailwind via CDN
+- **Frontend:** HTML/CSS/JS vanilla + Tailwind via CDN + Lucide Icons
+- **Player:** YouTube IFrame API (prévia embutida)
 - **Progresso em tempo real:** SSE (Server-Sent Events)
 - **Dependências:** uv + pyproject.toml
 
 ## Estrutura do Projeto
 
 ```
-youtube_downloader/
-├── app.py
+ytool/
+├── app.py                    # FastAPI app + lifespan
+├── config.py                 # pydantic-settings
 ├── pyproject.toml
-├── .env.example
-├── .gitignore
+├── YTool.command              # Launcher macOS
+├── YTool.bat                  # Launcher Windows
 ├── routers/
-│   ├── downloader.py
-│   └── subscriptions.py
+│   ├── downloader.py          # Download, cancel, formats, thumbnail, history
+│   ├── subscriptions.py       # OAuth, subs, playlists
+│   └── config.py              # Config, open-folder
 ├── services/
-│   ├── ytdlp_service.py
-│   └── youtube_auth.py
-├── static/
-│   ├── index.html
-│   ├── style.css
-│   └── app.js
-└── config.py
+│   ├── ytdlp_service.py       # yt-dlp subprocess, progress, cancel
+│   ├── youtube_auth.py        # OAuth + YouTube API operations
+│   └── history_service.py     # Persistent download history
+└── static/
+    ├── index.html             # SPA com 4 abas + modal ajuda + player
+    ├── app.js                 # Frontend (fila, drag-drop, tema, player)
+    └── style.css              # Dark/light theme, sidebar, components
 ```
 
 ## Módulos
 
 ### Módulo 1 — Downloads
 
-**Endpoint:** `POST /api/download`
-
-**Request:**
-```python
-class DownloadRequest(BaseModel):
-    url: str
-    quality: str = "best"    # best, 1080p, 720p, 480p, 360p
-    format: str = "mp4"      # mp4, webm, mkv
-    audio_only: bool = False
-    category: str
-```
+**Endpoints:** `POST /api/download`, `POST /api/download/cancel`, `GET /api/formats`, `GET /api/history`, `DELETE /api/history`
 
 **Fluxo:**
-1. Detecta plataforma pela URL (youtube.com / instagram.com)
-2. Monta pasta: `{base_dir}/{plataforma}/{categoria}/`
-3. Chama yt-dlp via asyncio.subprocess (não bloqueia o servidor)
-4. Envia progresso via SSE
-5. Retorna nome do arquivo ao concluir
+1. Usuário cola URL → auto-inspeciona formatos e mostra prévia com player
+2. Escolhe qualidade, formato, categoria, nome, trecho (opcional)
+3. Clica Baixar (direto) ou Adicionar à Fila (múltiplas URLs)
+4. yt-dlp roda via asyncio.subprocess com progresso SSE
+5. Ao concluir, salva no histórico persistente com thumbnail
+6. Pode cancelar a qualquer momento
+
+**Features:**
+- Fila de downloads sequencial
+- Cancelamento via kill do processo
+- Corte de trecho via `--download-sections`
+- Nome personalizado do arquivo
+- Drag & drop de URLs
+- Auto-paste do clipboard
+- Histórico persistente com thumbnails
+- Abrir pasta no Finder/Explorer/Nautilus
 
 ### Módulo 2 — Inscrições YouTube
 
-**Exportar:** `GET /api/subscriptions/export`
-- Autentica conta via OAuth Google
-- Busca inscrições paginando até o fim
-- Retorna JSON ou CSV para download
+**Endpoints:** `GET /export`, `POST /import`, `POST /transfer`
 
-**Importar:** `POST /api/subscriptions/import`
-- Recebe arquivo .json/.csv
-- Autentica conta destino
-- Inscreve nos canais (~1/segundo por rate limit)
-- Progresso via SSE
+**Fluxo:**
+1. Conecta conta de origem e destino via OAuth (tela de seleção de conta)
+2. Exporta → JSON/CSV, Importa → arquivo, ou Transfere direto A→B
+3. Rate limiting ~1 req/s pra respeitar API do YouTube
+4. Progresso via SSE
 
-**Transferir:** `POST /api/subscriptions/transfer`
-- Autentica conta A e conta B na mesma sessão
-- Transfere direto sem arquivo intermediário
-- Progresso via SSE
+### Módulo 3 — Playlists YouTube
 
-### UI — Três abas
+**Endpoints:** `GET /playlists`, `POST /playlists/transfer`
 
-**Downloads:**
-- Campo URL + botão Baixar
-- Seletores de qualidade, formato, categoria
-- Barra de progresso SSE
-- Histórico de downloads
+**Fluxo:**
+1. Carrega playlists da conta de origem (públicas + privadas)
+2. Seleciona quais copiar via checkbox
+3. Recria na conta destino com mesmos vídeos e privacidade
+4. Progresso duplo: por playlist + por vídeo
 
-**Inscrições:**
-- Botão exportar conta A → arquivo
-- Botão importar arquivo → conta B
-- Botão transferir direto A → B
-- Barra de progresso SSE
+### UI — Quatro abas + Sidebar
 
-**Config:**
-- Pasta base de downloads
-- Gerenciar categorias
-- Configurar credenciais Google (com guia passo a passo)
-- Botão "Testar conexão"
+**Downloads:** Formulário com URL, prévia, player, opções, fila, progresso, histórico
+**Inscrições:** Cards de conta, exportar/importar/transferir, progresso
+**Playlists:** Cards de conta, lista com checkbox, transferir, progresso duplo
+**Config:** Pasta de downloads, categorias, Google OAuth status
+
+**Extras:** Tema escuro/claro, modal de ajuda, toasts, ícones de plataforma
 
 ## Decision Log
 
 | Decisão | Alternativas | Motivo |
 |---------|-------------|--------|
-| FastAPI + HTML vanilla | Electron, Next.js | Menor complexidade, fácil distribuir |
+| FastAPI + HTML vanilla | Electron, Next.js | Menor complexidade, cross-platform |
 | yt-dlp para downloads | API oficial | Sem API key, suporta YouTube e Instagram |
 | SSE para progresso | Polling, WebSocket | Mais simples que WS, resolve o problema |
 | uv para dependências | pip + venv, Poetry | Mais rápido, moderno, pyproject.toml |
-| OAuth Google só para inscrições | Cookies, scraping | Único módulo que exige auth oficial |
-| Tokens em ~/.ytool/tokens/ | DB, sessão | Simples, seguro, persiste entre reinicializações |
+| OAuth Google | Cookies, scraping | Único módulo que exige auth oficial |
+| Tokens em ~/.ytool/ | DB, sessão | Simples, seguro, persiste entre reinicializações |
 | Tailwind via CDN | Bootstrap, CSS puro | Zero configuração, visual limpo |
+| Lucide Icons via CDN | Heroicons, Font Awesome | Leve, moderno, tree-shakeable |
+| YouTube IFrame API | Embed simples | Permite controle programático do player |
 | Instagram só público | Login Instagram | Evita violação de ToS |
-
-## Como Rodar
-
-```bash
-git clone ...
-uv sync
-cp .env.example .env
-uv run python app.py   # abre localhost:8000 automaticamente
-```
+| Sidebar lateral | Header com tabs | Melhor uso de tela grande (27"+) |
+| JSON pra histórico | SQLite, localStorage | Simples, portável, sem dependência extra |
+| select_account no OAuth | Sessão única | Permite usar 2 contas sem 2 browsers |
+| Cross-platform open-folder | macOS only | platform.system() detecta OS automaticamente |

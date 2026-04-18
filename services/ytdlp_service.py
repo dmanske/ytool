@@ -34,10 +34,11 @@ def _res_label(height: int) -> str:
             480: "480p", 360: "360p", 240: "240p", 144: "144p"}.get(height, f"{height}p")
 
 
-async def get_formats(url: str) -> list[dict]:
+async def get_formats(url: str, cookie_browser: str | None = None) -> list[dict]:
     """Return available formats for a URL using yt-dlp -J (JSON dump)."""
+    cookie_args = ["--cookies-from-browser", cookie_browser, "--remote-components", "ejs:github"] if cookie_browser else []
     proc = await asyncio.create_subprocess_exec(
-        "yt-dlp", "--no-playlist", "-J", url,
+        "yt-dlp", "--no-playlist", "-J", *cookie_args, url,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -92,7 +93,7 @@ async def get_formats(url: str) -> list[dict]:
 
 _PROGRESS_RE = re.compile(
     r"\[download\]\s+(?P<percent>[\d.]+)%\s+of\s+"
-    r"(?P<total>\S+)\s+at\s+(?P<speed>\S+)\s+ETA\s+(?P<eta>\S+)"
+    r"(?P<total>\S+)\s+at\s+(?P<speed>Unknown\s+B/s|\S+)\s+ETA\s+(?P<eta>\S+)"
 )
 
 
@@ -120,21 +121,15 @@ def build_ytdlp_args(
     sub_langs: str = "en,pt",
     format_kind: str | None = None,
     filename: str = "",
-    trim_start: str | None = None,
-    trim_end: str | None = None,
+    cookie_browser: str | None = None,
 ) -> list[str]:
     name = _safe_filename(filename) if filename else "%(title)s"
     output_template = str(output_dir / f"{name}.%(ext)s")
     # --no-playlist: for YouTube, prevent downloading entire playlist when URL has &list=
     # Not applied to Instagram so carousel posts (multiple photos/videos) download fully
     no_playlist = ["--no-playlist"] if "youtube" in url or "youtu.be" in url else []
-    args = ["yt-dlp", "--newline", *no_playlist, "-o", output_template]
-
-    # Trim/cut support via --download-sections
-    if trim_start or trim_end:
-        start = trim_start or "0"
-        end = trim_end or "inf"
-        args += ["--download-sections", f"*{start}-{end}"]
+    cookie_args = ["--cookies-from-browser", cookie_browser, "--remote-components", "ejs:github"] if cookie_browser else []
+    args = ["yt-dlp", "--newline", *no_playlist, *cookie_args, "-o", output_template]
 
     if audio_only:
         args += ["-x", "--audio-format", "mp3"]
@@ -185,8 +180,7 @@ async def download_with_progress(
     sub_langs: str = "en,pt",
     filename: str = "",
     download_id: str = "",
-    trim_start: str | None = None,
-    trim_end: str | None = None,
+    cookie_browser: str | None = None,
 ) -> AsyncGenerator[str, None]:
     platform = detect_platform(url)
     output_dir = settings.base_download_dir / platform / category
@@ -194,8 +188,7 @@ async def download_with_progress(
 
     args = build_ytdlp_args(
         url, quality, fmt, audio_only, output_dir, format_id,
-        subtitles, sub_langs, format_kind, filename,
-        trim_start, trim_end,
+        subtitles, sub_langs, format_kind, filename, cookie_browser,
     )
 
     proc = await asyncio.create_subprocess_exec(

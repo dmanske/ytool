@@ -1,3 +1,16 @@
+// ── Browser auto-detection ─────────────────────────────────────────────────────
+
+function detectBrowser() {
+  const ua = navigator.userAgent;
+  if (ua.includes('Firefox')) return 'firefox';
+  if (ua.includes('Edg/')) return 'edge';
+  if (ua.includes('Chrome')) return 'chrome';
+  if (ua.includes('Safari')) return 'safari';
+  return 'chrome';
+}
+
+const DETECTED_BROWSER = detectBrowser();
+
 // ── Tab switching ──────────────────────────────────────────────────────────────
 
 const TAB_IDS = ['downloads', 'subscriptions', 'playlists', 'config'];
@@ -101,10 +114,7 @@ function toggleSubLangs() {
   document.getElementById('sub-langs-row').classList.toggle('hidden', !checked);
 }
 
-function toggleTrim() {
-  const checked = document.getElementById('trim-toggle').checked;
-  document.getElementById('trim-row').classList.toggle('hidden', !checked);
-}
+
 
 // ── Drag & drop URL ────────────────────────────────────────────────────────────
 
@@ -167,11 +177,9 @@ function clearUrlAndPreview() {
   document.getElementById('url-input').value = '';
   document.getElementById('video-preview').classList.add('hidden');
   document.getElementById('formats-section').classList.add('hidden');
-  document.getElementById('player-section').classList.add('hidden');
   document.getElementById('icon-yt').classList.remove('active');
   document.getElementById('icon-ig').classList.remove('active');
   selectedFormatId = null;
-  if (ytPlayer) { ytPlayer.destroy(); ytPlayer = null; }
 }
 
 // ── Download queue ─────────────────────────────────────────────────────────────
@@ -193,8 +201,8 @@ function getFormData() {
     category: document.getElementById('category-select').value,
     filename: document.getElementById('filename-input').value.trim(),
     thumbnail: thumbUrl,
-    trim_start: document.getElementById('trim-toggle').checked ? document.getElementById('trim-start').value.trim() || null : null,
-    trim_end: document.getElementById('trim-toggle').checked ? document.getElementById('trim-end').value.trim() || null : null,
+
+    cookie_browser: DETECTED_BROWSER,
   };
 }
 
@@ -289,11 +297,11 @@ async function inspectFormats() {
   selectedFormatId = null;
 
   try {
-    const resp = await fetch(`/api/formats?url=${encodeURIComponent(url)}`);
+    const formatsUrl = `/api/formats?url=${encodeURIComponent(url)}&cookie_browser=${DETECTED_BROWSER}`;
+    const resp = await fetch(formatsUrl);
     const data = await resp.json();
     renderFormats(data.formats || []);
     renderVideoPreview(data);
-    loadYouTubePlayer(url, data.duration);
   } catch (e) {
     showToast('Não foi possível buscar os formatos: ' + e.message, 'error');
   } finally {
@@ -303,51 +311,6 @@ async function inspectFormats() {
   }
 }
 
-// ── YouTube embedded player for trim ───────────────────────────────────────────
-
-let ytPlayer = null;
-let ytPlayerReady = false;
-
-// Called by YouTube IFrame API when ready
-function onYouTubeIframeAPIReady() {
-  // API loaded, player will be created on demand
-}
-
-function extractVideoId(url) {
-  const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/);
-  return m ? m[1] : null;
-}
-
-function loadYouTubePlayer(url, duration) {
-  const videoId = extractVideoId(url);
-  const section = document.getElementById('player-section');
-
-  if (!videoId) {
-    section.classList.add('hidden');
-    return;
-  }
-
-  section.classList.remove('hidden');
-
-  // Destroy old player
-  if (ytPlayer) {
-    ytPlayer.destroy();
-    ytPlayer = null;
-  }
-
-  ytPlayerReady = false;
-  ytPlayer = new YT.Player('yt-player', {
-    videoId: videoId,
-    playerVars: {
-      autoplay: 0,
-      modestbranding: 1,
-      rel: 0,
-    },
-    events: {
-      onReady: () => { ytPlayerReady = true; },
-    },
-  });
-}
 
 function renderVideoPreview(data) {
   const preview = document.getElementById('video-preview');

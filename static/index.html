@@ -23,7 +23,6 @@
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <script src="https://www.youtube.com/iframe_api"></script>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen font-sans antialiased flex">
 
@@ -125,15 +124,6 @@
               </div>
             </div>
 
-            <!-- Embedded YouTube player for preview -->
-            <div id="player-section" class="hidden">
-              <div class="player-card player-compact">
-                <div id="yt-player-container" class="player-embed">
-                  <div id="yt-player"></div>
-                </div>
-              </div>
-            </div>
-
             <!-- Formats -->
             <div id="formats-section" class="hidden">
               <label class="field-label">Formatos disponíveis</label>
@@ -176,6 +166,7 @@
               </div>
             </div>
 
+
             <!-- Nome personalizado -->
             <div>
               <label class="field-label">Nome do arquivo (opcional)</label>
@@ -183,23 +174,6 @@
                 class="input w-full" />
             </div>
 
-            <!-- Cortar trecho -->
-            <div>
-              <label class="field-label flex items-center gap-2">
-                <input id="trim-toggle" type="checkbox" class="accent-red-500 w-4 h-4 rounded" onchange="toggleTrim()">
-                Cortar trecho do vídeo
-              </label>
-              <div id="trim-row" class="hidden grid grid-cols-2 gap-3 mt-2">
-                <div>
-                  <label class="text-xs text-gray-500 mb-1 block">Início (ex: 1:30)</label>
-                  <input id="trim-start" type="text" placeholder="0:00" class="input w-full" />
-                </div>
-                <div>
-                  <label class="text-xs text-gray-500 mb-1 block">Fim (ex: 3:00)</label>
-                  <input id="trim-end" type="text" placeholder="até o final" class="input w-full" />
-                </div>
-              </div>
-            </div>
 
             <div id="sub-langs-row" class="hidden flex items-center gap-3">
               <label class="field-label whitespace-nowrap mb-0">Idiomas:</label>
@@ -508,7 +482,6 @@
               <li>Marque <strong>Somente áudio</strong> para baixar apenas o áudio em mp3/m4a.</li>
               <li>Marque <strong>Legendas</strong> e informe os idiomas (ex: <code>en,pt</code>) para baixar legendas junto.</li>
               <li>Use <strong>Nome do arquivo</strong> para definir um nome personalizado (opcional).</li>
-              <li>Marque <strong>Cortar trecho</strong> para baixar apenas uma parte do vídeo (ex: de 1:30 a 3:00).</li>
               <li>Clique em <strong>Baixar</strong> para download direto, ou <strong>Adicionar à fila</strong> para baixar várias URLs em sequência.</li>
               <li>Durante o download, use o botão <strong>✕</strong> ao lado da porcentagem para cancelar.</li>
             </ol>
