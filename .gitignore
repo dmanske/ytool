@@ -10,3 +10,4 @@ dist/
 .vscode/
 .claude/
 YTool.app/
+*.log
