@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, Query
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from services.history_service import clear_history, load_history, save_entry
@@ -25,8 +25,9 @@ class DownloadRequest(BaseModel):
     sub_langs: str = "en,pt"
     filename: str = ""
     download_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    thumbnail: str = ""  # thumbnail URL for history
-    cookie_browser: str | None = None  # e.g. "chrome", "firefox" — for member-only content
+    trim_start: str | None = None
+    trim_end: str | None = None
+    thumbnail: str = ""
 
 
 class CancelRequest(BaseModel):
@@ -34,8 +35,8 @@ class CancelRequest(BaseModel):
 
 
 @router.get("/formats")
-async def list_formats(url: str = Query(...), cookie_browser: str | None = Query(None)):
-    return await get_formats(url, cookie_browser=cookie_browser)
+async def list_formats(url: str = Query(...)):
+    return await get_formats(url)
 
 
 @router.get("/thumbnail")
@@ -79,7 +80,8 @@ async def start_download(req: DownloadRequest):
             sub_langs=req.sub_langs,
             filename=req.filename,
             download_id=req.download_id,
-            cookie_browser=req.cookie_browser,
+            trim_start=req.trim_start,
+            trim_end=req.trim_end,
         ):
             # Capture output_dir from the done event for history
             if '"status": "done"' in chunk:
