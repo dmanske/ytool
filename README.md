@@ -230,6 +230,26 @@ uv run python app.py --no-browser
 - **Playlists:** vídeos removidos ou privados na conta de origem não são copiados
 - **Windows:** o botão "abrir pasta" usa `explorer` automaticamente no Windows, `open` no macOS e `xdg-open` no Linux.
 
+## Skills utilizadas no desenvolvimento
+
+Skills do Kiro/Claude ativadas durante o desenvolvimento e que devem ser usadas em futuras revisões:
+
+| Skill | Uso |
+|-------|-----|
+| `brainstorming` | Ideação estruturada antes de implementar — entender escopo, validar decisões, evitar prematuridade |
+| `python-pro` | Padrões Python 3.12+, async/await, type hints, uv, ruff |
+| `fastapi-pro` | SSE, Pydantic V2, async subprocess, dependency injection, streaming responses |
+| `frontend-design` | Direção estética intencional, design system, tipografia, cores, motion |
+| `design-spells` | Micro-interações, detalhes visuais que elevam a experiência |
+| `mobile-design` | Responsividade, touch targets, performance visual |
+| `ui-ux-pro-max` | Checklist de qualidade visual, acessibilidade, dark/light mode, ícones |
+| `clean-code` | Princípios Uncle Bob — funções pequenas, nomes intencionais, sem comentários desnecessários |
+| `code-review-checklist` | Auditoria de funcionalidade, segurança, performance, testes, qualidade |
+| `documentation-templates` | Estrutura de README, CHANGELOG, ADR, API docs |
+| `software-architecture` | Clean Architecture, separação de concerns, early returns, DDD |
+
+**Como usar:** ao revisar ou estender o projeto, ative essas skills pra manter consistência de código, visual e documentação.
+
 ## Licença
 
 MIT
