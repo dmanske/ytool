@@ -1,44 +1,73 @@
 import SwiftUI
 
+// MARK: - Platform
+
+enum Platform: String, CaseIterable {
+    case youtube  = "YouTube"
+    case instagram = "Instagram"
+
+    var color: Color {
+        switch self {
+        case .youtube:  return .red
+        case .instagram: return .pink
+        }
+    }
+
+    var gradient: LinearGradient {
+        switch self {
+        case .youtube:
+            return LinearGradient(colors: [.red, .orange], startPoint: .topLeading, endPoint: .bottomTrailing)
+        case .instagram:
+            return LinearGradient(colors: [.pink, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .youtube:  return "play.rectangle.fill"
+        case .instagram: return "camera.fill"
+        }
+    }
+
+    var placeholder: String {
+        switch self {
+        case .youtube:  return "https://youtube.com/watch?v=..."
+        case .instagram: return "https://instagram.com/p/..."
+        }
+    }
+
+    var note: String {
+        switch self {
+        case .youtube:  return "Vídeos, Shorts e playlists públicas"
+        case .instagram: return "Posts, Reels e Stories públicos"
+        }
+    }
+
+    func matches(_ url: String) -> Bool {
+        switch self {
+        case .youtube:  return url.contains("youtube.com") || url.contains("youtu.be")
+        case .instagram: return url.contains("instagram.com")
+        }
+    }
+}
+
 // MARK: - Main View
 
 struct DownloadsView: View {
     @EnvironmentObject private var manager: DownloadManager
-
-    // Form state
-    @State private var url = ""
-    @State private var quality = "best"
-    @State private var format = "mp4"
-    @State private var audioOnly = false
-    @State private var category = "Música"
-    @State private var customFilename = ""
-    @State private var subtitles = false
-    @State private var subLangs = "en,pt"
-
-    // UI state
-    @State private var isInspecting = false
-    @State private var inspectError: String?
-    @State private var selectedFormatID: String?
-    @State private var showFormats = false
-    @State private var showAdvanced = false
     @State private var isAnimating = false
-    @FocusState private var urlFocused: Bool
-
-    private let qualities   = ["best", "1080p", "720p", "480p", "360p"]
-    private let formats     = ["mp4", "webm", "mkv"]
-    private let categories  = ["Música", "Tutoriais", "Filmes", "Outros"]
 
     var body: some View {
         GeometryReader { geo in
-            if geo.size.width >= 800 {
+            if geo.size.width >= 900 {
                 HSplitView {
-                    formColumn.frame(minWidth: 480, idealWidth: 620)
+                    mainColumn(wide: true).frame(minWidth: 560, idealWidth: 700)
                     historyColumn.frame(minWidth: 280, idealWidth: 360)
                 }
             } else {
                 ScrollView {
                     VStack(spacing: 0) {
-                        formColumn
+                        mainColumn(wide: false)
                         Divider()
                         historyColumn.frame(height: 380)
                     }
@@ -49,33 +78,37 @@ struct DownloadsView: View {
             withAnimation(.spring(response: 0.6, dampingFraction: 0.7).delay(0.1)) {
                 isAnimating = true
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { urlFocused = true }
-        }
-        // Auto-inspect when URL changes and looks valid
-        .onChange(of: url) { _, newValue in
-            inspectError = nil
-            if newValue.isEmpty {
-                manager.videoInfo = nil
-                selectedFormatID = nil
-                showFormats = false
-            }
         }
     }
 
-    // MARK: - Form column
+    // MARK: - Main column
 
-    private var formColumn: some View {
+    private func mainColumn(wide: Bool) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 28) {
                 header
-                urlSection
-                if manager.videoInfo != nil { videoPreview }
-                if showFormats && !(manager.videoInfo?.formats.isEmpty ?? true) { formatsSection }
-                optionsGrid
-                advancedSection
-                actionButtons
-                if manager.isDownloading || manager.progress > 0 { progressCard }
-                if !manager.queue.isEmpty { queueSection }
+
+                // Two platform cards side by side
+                if wide {
+                    HStack(alignment: .top, spacing: 16) {
+                        PlatformDownloadCard(platform: .youtube)
+                        PlatformDownloadCard(platform: .instagram)
+                    }
+                } else {
+                    VStack(spacing: 16) {
+                        PlatformDownloadCard(platform: .youtube)
+                        PlatformDownloadCard(platform: .instagram)
+                    }
+                }
+
+                if manager.isDownloading || manager.progress > 0 {
+                    ModernProgressCard(manager: manager)
+                        .transition(.scale(scale: 0.97).combined(with: .opacity))
+                }
+
+                if !manager.queue.isEmpty {
+                    QueueSection()
+                }
             }
             .padding(28)
         }
@@ -98,292 +131,12 @@ struct DownloadsView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Bem-vindo ao YTool")
                     .font(.title2).fontWeight(.bold)
-                Text("Baixe vídeos e áudios do YouTube e Instagram")
+                Text("Escolha a plataforma e cole a URL para baixar")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
         }
         .opacity(isAnimating ? 1 : 0)
         .offset(y: isAnimating ? 0 : -16)
-    }
-
-    // MARK: - URL section
-
-    private var urlSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("URL do Vídeo", systemImage: "link")
-                .font(.headline)
-
-            HStack(spacing: 10) {
-                TextField("Cole a URL do YouTube ou Instagram aqui...", text: $url)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($urlFocused)
-                    .onSubmit { triggerInspect() }
-
-                if !url.isEmpty {
-                    Button {
-                        clearURL()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .transition(.scale.combined(with: .opacity))
-                }
-
-                Button {
-                    triggerInspect()
-                } label: {
-                    if isInspecting {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Label("Inspecionar", systemImage: "magnifyingglass")
-                    }
-                }
-                .buttonStyle(.bordered)
-                .disabled(url.isEmpty || isInspecting)
-            }
-
-            // Platform tags
-            HStack(spacing: 8) {
-                PlatformTag(name: "YouTube",  color: .red,  active: url.contains("youtube") || url.contains("youtu.be"))
-                PlatformTag(name: "Instagram", color: .pink, active: url.contains("instagram"))
-                Spacer()
-                if let err = inspectError {
-                    Label(err, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption).foregroundStyle(.orange)
-                }
-            }
-        }
-        .opacity(isAnimating ? 1 : 0)
-        .offset(y: isAnimating ? 0 : 16)
-        .animation(.spring(response: 0.6, dampingFraction: 0.7).delay(0.15), value: isAnimating)
-    }
-
-    // MARK: - Video preview
-
-    private var videoPreview: some View {
-        Group {
-            if let info = manager.videoInfo {
-                HStack(spacing: 14) {
-                    // Thumbnail
-                    AsyncImage(url: URL(string: info.thumbnail)) { img in
-                        img.resizable().aspectRatio(contentMode: .fill)
-                    } placeholder: {
-                        Rectangle().fill(.quaternary)
-                    }
-                    .frame(width: 120, height: 68)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(info.title)
-                            .font(.subheadline).fontWeight(.semibold)
-                            .lineLimit(2)
-                        HStack(spacing: 8) {
-                            if !info.uploader.isEmpty {
-                                Label(info.uploader, systemImage: "person.fill")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            if info.duration > 0 {
-                                Label(info.durationFormatted, systemImage: "clock")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                        Button {
-                            withAnimation(.spring(response: 0.3)) { showFormats.toggle() }
-                        } label: {
-                            Label(showFormats ? "Ocultar formatos" : "Ver formatos disponíveis",
-                                  systemImage: showFormats ? "chevron.up" : "chevron.down")
-                                .font(.caption).fontWeight(.medium)
-                        }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(.blue)
-                    }
-                }
-                .padding(12)
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary, lineWidth: 1))
-                .transition(.scale(scale: 0.97).combined(with: .opacity))
-            }
-        }
-    }
-
-    // MARK: - Formats section
-
-    private var formatsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("FORMATOS DISPONÍVEIS")
-                .font(.caption).fontWeight(.semibold).foregroundStyle(.secondary)
-
-            ScrollView {
-                LazyVStack(spacing: 4) {
-                    ForEach(manager.videoInfo?.formats ?? []) { fmt in
-                        FormatRow(format: fmt, isSelected: selectedFormatID == fmt.id) {
-                            selectedFormatID = selectedFormatID == fmt.id ? nil : fmt.id
-                        }
-                    }
-                }
-            }
-            .frame(maxHeight: 200)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.quaternary, lineWidth: 1))
-
-            if selectedFormatID != nil {
-                Text("Formato específico selecionado — as opções de Qualidade/Formato abaixo serão ignoradas.")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-        }
-        .transition(.opacity.combined(with: .scale(scale: 0.97)))
-    }
-
-    // MARK: - Options grid
-
-    private var optionsGrid: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 12) {
-                OptionCard(title: "Qualidade", icon: "sparkles", selection: $quality, options: qualities)
-                OptionCard(title: "Formato",   icon: "film",     selection: $format,  options: formats)
-            }
-            HStack(spacing: 12) {
-                OptionCard(title: "Categoria", icon: "folder", selection: $category, options: categories)
-                AudioToggleCard(audioOnly: $audioOnly)
-            }
-        }
-        .opacity(isAnimating ? 1 : 0)
-        .offset(y: isAnimating ? 0 : 16)
-        .animation(.spring(response: 0.6, dampingFraction: 0.7).delay(0.25), value: isAnimating)
-    }
-
-    // MARK: - Advanced section (nome, legendas)
-
-    private var advancedSection: some View {
-        DisclosureGroup(isExpanded: $showAdvanced) {
-            VStack(alignment: .leading, spacing: 14) {
-                // Custom filename
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("Nome do arquivo (opcional)", systemImage: "pencil")
-                        .font(.subheadline).fontWeight(.medium)
-                    TextField("Deixe vazio para usar o título do vídeo", text: $customFilename)
-                        .textFieldStyle(.roundedBorder)
-                }
-
-                // Subtitles
-                VStack(alignment: .leading, spacing: 8) {
-                    Toggle(isOn: $subtitles) {
-                        Label("Baixar legendas", systemImage: "captions.bubble")
-                            .font(.subheadline).fontWeight(.medium)
-                    }
-                    .toggleStyle(.switch).tint(.red)
-
-                    if subtitles {
-                        HStack(spacing: 8) {
-                            Text("Idiomas:")
-                                .font(.caption).foregroundStyle(.secondary)
-                            TextField("en,pt,es", text: $subLangs)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(maxWidth: 200)
-                            Text("separados por vírgula")
-                                .font(.caption2).foregroundStyle(.tertiary)
-                        }
-                        .transition(.opacity.combined(with: .scale(scale: 0.97)))
-                    }
-                }
-            }
-            .padding(.top, 12)
-        } label: {
-            Label("Opções avançadas", systemImage: "slider.horizontal.3")
-                .font(.subheadline).fontWeight(.medium)
-        }
-        .padding(14)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary, lineWidth: 1))
-    }
-
-    // MARK: - Action buttons
-
-    private var actionButtons: some View {
-        HStack(spacing: 12) {
-            Button {
-                startDownload()
-            } label: {
-                Label("Baixar", systemImage: "arrow.down.circle.fill")
-                    .fontWeight(.semibold)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.red)
-            .controlSize(.large)
-            .disabled(url.isEmpty || manager.isDownloading)
-            .keyboardShortcut(.return, modifiers: .command)
-
-            Button {
-                addToQueue()
-            } label: {
-                Label("Fila", systemImage: "list.bullet.rectangle.portrait")
-                    .fontWeight(.medium)
-                    .padding(.vertical, 10)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-            .disabled(url.isEmpty)
-            .help("Adicionar à fila de downloads")
-
-            if manager.isDownloading {
-                Button {
-                    manager.cancel()
-                } label: {
-                    Label("Cancelar", systemImage: "xmark.circle.fill")
-                        .padding(.vertical, 10)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .transition(.scale.combined(with: .opacity))
-            }
-        }
-        .opacity(isAnimating ? 1 : 0)
-        .offset(y: isAnimating ? 0 : 16)
-        .animation(.spring(response: 0.6, dampingFraction: 0.7).delay(0.35), value: isAnimating)
-    }
-
-    // MARK: - Progress card
-
-    private var progressCard: some View {
-        ModernProgressCard(manager: manager)
-            .transition(.scale(scale: 0.97).combined(with: .opacity))
-    }
-
-    // MARK: - Queue section
-
-    private var queueSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label("Fila (\(manager.queue.count))", systemImage: "list.bullet.rectangle.portrait")
-                    .font(.headline)
-                Spacer()
-                Button {
-                    manager.startQueue()
-                } label: {
-                    Label("Iniciar fila", systemImage: "play.fill")
-                        .font(.caption).fontWeight(.medium)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
-                .controlSize(.small)
-                .disabled(manager.isProcessingQueue || manager.isDownloading)
-            }
-
-            ForEach(manager.queue) { item in
-                QueueRow(item: item) {
-                    manager.removeFromQueue(id: item.id)
-                }
-            }
-        }
-        .padding(16)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary, lineWidth: 1))
-        .transition(.scale(scale: 0.97).combined(with: .opacity))
     }
 
     // MARK: - History column
@@ -398,21 +151,17 @@ struct DownloadsView: View {
                     Button {
                         withAnimation { manager.clearHistory() }
                     } label: {
-                        Label("Limpar", systemImage: "trash")
-                            .font(.caption)
+                        Label("Limpar", systemImage: "trash").font(.caption)
                     }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
+                    .buttonStyle(.borderless).foregroundStyle(.secondary)
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 20)
+            .padding(.horizontal, 20).padding(.top, 20)
 
             if manager.history.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "tray")
-                        .font(.system(size: 36))
-                        .foregroundStyle(.quaternary)
+                        .font(.system(size: 36)).foregroundStyle(.quaternary)
                     Text("Nenhum download ainda")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
@@ -424,26 +173,309 @@ struct DownloadsView: View {
                             HistoryItemRow(item: item)
                         }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 12)
+                    .padding(.horizontal, 12).padding(.bottom, 12)
                 }
             }
         }
         .background(.background)
     }
+}
 
-    // MARK: - Actions
+// MARK: - Platform Download Card
+
+struct PlatformDownloadCard: View {
+    let platform: Platform
+    @EnvironmentObject private var manager: DownloadManager
+
+    @State private var url = ""
+    @State private var quality = "best"
+    @State private var format = "mp4"
+    @State private var audioOnly = false
+    @State private var category = "Música"
+    @State private var customFilename = ""
+    @State private var subtitles = false
+    @State private var subLangs = "en,pt"
+
+    @State private var isInspecting = false
+    @State private var inspectError: String?
+    @State private var videoInfo: VideoInfo?
+    @State private var selectedFormatID: String?
+    @State private var showFormats = false
+    @State private var showAdvanced = false
+    @State private var isAnimating = false
+    @FocusState private var urlFocused: Bool
+
+    private let qualities  = ["best", "1080p", "720p", "480p", "360p"]
+    private let formats    = ["mp4", "webm", "mkv"]
+    private let categories = ["Música", "Tutoriais", "Filmes", "Outros"]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            cardHeader
+            Divider().overlay(platform.color.opacity(0.2))
+            cardBody
+        }
+        .background(.background)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(platform.color.opacity(0.25), lineWidth: 1.5)
+        )
+        .shadow(color: platform.color.opacity(0.06), radius: 12, y: 4)
+        .onAppear {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.7).delay(platform == .youtube ? 0.15 : 0.25)) {
+                isAnimating = true
+            }
+        }
+        .opacity(isAnimating ? 1 : 0)
+        .offset(y: isAnimating ? 0 : 20)
+        .onChange(of: url) { _, newValue in
+            inspectError = nil
+            if newValue.isEmpty {
+                videoInfo = nil
+                selectedFormatID = nil
+                showFormats = false
+            }
+        }
+    }
+
+    // MARK: Card header
+
+    private var cardHeader: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(platform.gradient)
+                    .frame(width: 36, height: 36)
+                Image(systemName: platform.icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(platform.rawValue)
+                    .font(.headline).fontWeight(.bold)
+                Text(platform.note)
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .background(platform.color.opacity(0.04))
+    }
+
+    // MARK: Card body
+
+    private var cardBody: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            // URL field
+            HStack(spacing: 8) {
+                TextField(platform.placeholder, text: $url)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($urlFocused)
+                    .onSubmit { triggerInspect() }
+
+                if !url.isEmpty {
+                    Button { clearURL() } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.scale.combined(with: .opacity))
+                }
+
+                Button { triggerInspect() } label: {
+                    if isInspecting {
+                        ProgressView().controlSize(.small).frame(width: 20)
+                    } else {
+                        Image(systemName: "magnifyingglass")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .tint(platform.color)
+                .disabled(url.isEmpty || isInspecting)
+                .help("Inspecionar formatos")
+            }
+
+            if let err = inspectError {
+                Label(err, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+                    .transition(.opacity)
+            }
+
+            // Video preview
+            if let info = videoInfo {
+                videoPreview(info: info)
+            }
+
+            // Formats
+            if showFormats, let formats = videoInfo?.formats, !formats.isEmpty {
+                formatsSection(formats: formats)
+            }
+
+            // Options row
+            HStack(spacing: 10) {
+                Picker("", selection: $quality) {
+                    ForEach(qualities, id: \.self) { Text($0).tag($0) }
+                }
+                .pickerStyle(.menu).labelsHidden().frame(maxWidth: .infinity)
+                .help("Qualidade")
+
+                if !audioOnly {
+                    Picker("", selection: $format) {
+                        ForEach(formats, id: \.self) { Text($0).tag($0) }
+                    }
+                    .pickerStyle(.menu).labelsHidden().frame(maxWidth: .infinity)
+                    .help("Formato")
+                }
+
+                Picker("", selection: $category) {
+                    ForEach(categories, id: \.self) { Text($0).tag($0) }
+                }
+                .pickerStyle(.menu).labelsHidden().frame(maxWidth: .infinity)
+                .help("Categoria")
+
+                Toggle("", isOn: $audioOnly)
+                    .toggleStyle(.switch).tint(platform.color).labelsHidden()
+                    .help("Somente áudio (MP3)")
+            }
+
+            // Advanced options
+            DisclosureGroup(isExpanded: $showAdvanced) {
+                VStack(alignment: .leading, spacing: 10) {
+                    TextField("Nome do arquivo (opcional)", text: $customFilename)
+                        .textFieldStyle(.roundedBorder)
+
+                    HStack(spacing: 10) {
+                        Toggle(isOn: $subtitles) {
+                            Text("Legendas").font(.caption)
+                        }
+                        .toggleStyle(.switch).tint(platform.color)
+
+                        if subtitles {
+                            TextField("en,pt", text: $subLangs)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: 120)
+                                .transition(.opacity)
+                        }
+                    }
+                }
+                .padding(.top, 8)
+            } label: {
+                Label("Avançado", systemImage: "slider.horizontal.3")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            // Action buttons
+            HStack(spacing: 8) {
+                Button {
+                    startDownload()
+                } label: {
+                    Label("Baixar", systemImage: "arrow.down.circle.fill")
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(platform.color)
+                .disabled(url.isEmpty || manager.isDownloading)
+                .keyboardShortcut(platform == .youtube ? .return : "i", modifiers: .command)
+
+                Button {
+                    addToQueue()
+                } label: {
+                    Image(systemName: "list.bullet.rectangle.portrait")
+                }
+                .buttonStyle(.bordered)
+                .tint(platform.color)
+                .disabled(url.isEmpty)
+                .help("Adicionar à fila")
+            }
+        }
+        .padding(16)
+    }
+
+    // MARK: Video preview
+
+    private func videoPreview(info: VideoInfo) -> some View {
+        HStack(spacing: 10) {
+            AsyncImage(url: URL(string: info.thumbnail)) { img in
+                img.resizable().aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Rectangle().fill(.quaternary)
+            }
+            .frame(width: 90, height: 52)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(info.title).font(.caption).fontWeight(.semibold).lineLimit(2)
+                HStack(spacing: 6) {
+                    if !info.uploader.isEmpty {
+                        Text(info.uploader).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if info.duration > 0 {
+                        Text(info.durationFormatted).font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                Button {
+                    withAnimation(.spring(response: 0.3)) { showFormats.toggle() }
+                } label: {
+                    Label(showFormats ? "Ocultar formatos" : "Ver formatos",
+                          systemImage: showFormats ? "chevron.up" : "chevron.down")
+                        .font(.caption2).fontWeight(.medium)
+                }
+                .buttonStyle(.borderless).foregroundStyle(platform.color)
+            }
+        }
+        .padding(10)
+        .background(platform.color.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(platform.color.opacity(0.15), lineWidth: 1))
+        .transition(.scale(scale: 0.97).combined(with: .opacity))
+    }
+
+    // MARK: Formats section
+
+    private func formatsSection(formats: [VideoFormat]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("FORMATOS").font(.caption2).fontWeight(.semibold).foregroundStyle(.secondary)
+            ScrollView {
+                LazyVStack(spacing: 3) {
+                    ForEach(formats) { fmt in
+                        Button {
+                            selectedFormatID = selectedFormatID == fmt.id ? nil : fmt.id
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text(fmt.kind.emoji)
+                                Text(fmt.label).font(.caption).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                                if selectedFormatID == fmt.id {
+                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(platform.color)
+                                }
+                            }
+                            .padding(.horizontal, 8).padding(.vertical, 5)
+                            .background(selectedFormatID == fmt.id ? platform.color.opacity(0.08) : Color.clear)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .frame(maxHeight: 160)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary, lineWidth: 1))
+        }
+        .transition(.opacity.combined(with: .scale(scale: 0.97)))
+    }
+
+    // MARK: Actions
 
     private func triggerInspect() {
         guard !url.isEmpty, !isInspecting else { return }
         isInspecting = true
         inspectError = nil
-        manager.videoInfo = nil
+        videoInfo = nil
         selectedFormatID = nil
 
         Task {
             do {
                 let info = try await VideoInfoService.shared.fetch(url: url)
+                videoInfo = info
                 manager.videoInfo = info
                 if !info.formats.isEmpty { showFormats = true }
             } catch {
@@ -456,6 +488,7 @@ struct DownloadsView: View {
     private func clearURL() {
         withAnimation(.spring(response: 0.3)) {
             url = ""
+            videoInfo = nil
             manager.videoInfo = nil
             selectedFormatID = nil
             showFormats = false
@@ -482,107 +515,46 @@ struct DownloadsView: View {
         )
         withAnimation(.spring(response: 0.3)) {
             url = ""
-            manager.videoInfo = nil
+            videoInfo = nil
             selectedFormatID = nil
             showFormats = false
         }
     }
 }
 
-// MARK: - Subviews
+// MARK: - Queue Section
 
-struct PlatformTag: View {
-    let name: String
-    let color: Color
-    let active: Bool
+struct QueueSection: View {
+    @EnvironmentObject private var manager: DownloadManager
 
     var body: some View {
-        HStack(spacing: 4) {
-            Circle().fill(active ? color : .secondary).frame(width: 6, height: 6)
-            Text(name).font(.caption2).fontWeight(.medium)
-        }
-        .padding(.horizontal, 8).padding(.vertical, 3)
-        .background(active ? color.opacity(0.12) : Color.secondary.opacity(0.08))
-        .clipShape(Capsule())
-        .animation(.spring(response: 0.3), value: active)
-    }
-}
-
-struct FormatRow: View {
-    let format: VideoFormat
-    let isSelected: Bool
-    let onTap: () -> Void
-
-    var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 10) {
-                Text(format.kind.emoji).font(.body)
-                Text(format.label)
-                    .font(.caption).lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text(format.kind.rawValue)
-                    .font(.caption2).foregroundStyle(.secondary)
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.red)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Fila (\(manager.queue.count))", systemImage: "list.bullet.rectangle.portrait")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    manager.startQueue()
+                } label: {
+                    Label("Iniciar fila", systemImage: "play.fill")
+                        .font(.caption).fontWeight(.medium)
                 }
+                .buttonStyle(.borderedProminent).tint(.red).controlSize(.small)
+                .disabled(manager.isProcessingQueue || manager.isDownloading)
             }
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(isSelected ? Color.red.opacity(0.08) : Color.clear)
-        }
-        .buttonStyle(.plain)
-        .contentShape(Rectangle())
-    }
-}
-
-struct OptionCard: View {
-    let title: String
-    let icon: String
-    @Binding var selection: String
-    let options: [String]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: icon)
-                .font(.subheadline).fontWeight(.medium).foregroundStyle(.secondary)
-            Picker("", selection: $selection) {
-                ForEach(options, id: \.self) { Text($0).tag($0) }
+            ForEach(manager.queue) { item in
+                QueueRow(item: item) { manager.removeFromQueue(id: item.id) }
             }
-            .pickerStyle(.menu).labelsHidden()
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(12)
+        .padding(16)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary, lineWidth: 1))
+        .transition(.scale(scale: 0.97).combined(with: .opacity))
     }
 }
 
-struct AudioToggleCard: View {
-    @Binding var audioOnly: Bool
-
-    var body: some View {
-        HStack {
-            Image(systemName: audioOnly ? "music.note" : "video")
-                .font(.title3)
-                .foregroundStyle(audioOnly ? .red : .secondary)
-                .frame(width: 28)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Apenas Áudio").font(.subheadline).fontWeight(.medium)
-                Text("MP3").font(.caption2).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Toggle("", isOn: $audioOnly).labelsHidden().toggleStyle(.switch).tint(.red)
-        }
-        .padding(12)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(audioOnly ? AnyShapeStyle(Color.red.opacity(0.3)) : AnyShapeStyle(Color.quaternary), lineWidth: 1.5)
-        )
-        .animation(.spring(response: 0.3), value: audioOnly)
-    }
-}
+// MARK: - Shared subviews (used by both cards and history)
 
 struct ModernProgressCard: View {
     @ObservedObject var manager: DownloadManager
@@ -592,15 +564,12 @@ struct ModernProgressCard: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(manager.statusText)
-                        .font(.headline).fontWeight(.semibold)
+                    Text(manager.statusText).font(.headline).fontWeight(.semibold)
                     if let last = manager.logLines.last {
-                        Text(last).font(.caption2).foregroundStyle(.secondary)
-                            .lineLimit(1).monospaced()
+                        Text(last).font(.caption2).foregroundStyle(.secondary).lineLimit(1).monospaced()
                     }
                 }
                 Spacer()
-                // Circular progress
                 ZStack {
                     Circle().stroke(.quaternary, lineWidth: 3).frame(width: 48, height: 48)
                     Circle()
@@ -612,12 +581,10 @@ struct ModernProgressCard: View {
                         .frame(width: 48, height: 48)
                         .rotationEffect(.degrees(-90))
                         .animation(.spring(response: 0.5), value: manager.progress)
-                    Text("\(Int(manager.progress))%")
-                        .font(.caption2).fontWeight(.bold).monospacedDigit()
+                    Text("\(Int(manager.progress))%").font(.caption2).fontWeight(.bold).monospacedDigit()
                 }
             }
 
-            // Linear bar
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 4).fill(.quaternary.opacity(0.3)).frame(height: 6)
@@ -629,7 +596,6 @@ struct ModernProgressCard: View {
             }
             .frame(height: 6)
 
-            // Log toggle
             if !manager.logLines.isEmpty {
                 Button {
                     withAnimation(.spring(response: 0.3)) { showLogs.toggle() }
@@ -684,20 +650,12 @@ struct QueueRow: View {
         }
     }
 
-    var statusLabel: String {
-        switch item.status {
-        case .pending: return "Pendente"
-        case .active:  return "Baixando"
-        case .done:    return "Concluído"
-        case .error:   return "Erro"
-        }
-    }
-
     var body: some View {
         HStack(spacing: 10) {
             Circle().fill(statusColor).frame(width: 8, height: 8)
             Text(item.url).font(.caption).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-            Text(statusLabel).font(.caption2).foregroundStyle(statusColor)
+            Text(item.status == .pending ? "Pendente" : item.status == .active ? "Baixando" : item.status == .done ? "Concluído" : "Erro")
+                .font(.caption2).foregroundStyle(statusColor)
             if item.status == .pending {
                 Button(action: onRemove) {
                     Image(systemName: "xmark").font(.caption2).foregroundStyle(.secondary)
@@ -715,16 +673,16 @@ struct HistoryItemRow: View {
     let item: DownloadHistoryItem
     @State private var isHovered = false
 
-    var platformIcon: String {
-        if item.url.contains("youtube") || item.url.contains("youtu.be") { return "play.rectangle.fill" }
-        if item.url.contains("instagram") { return "camera.fill" }
-        return "globe"
-    }
-
     var platformColor: Color {
         if item.url.contains("youtube") || item.url.contains("youtu.be") { return .red }
         if item.url.contains("instagram") { return .pink }
         return .blue
+    }
+
+    var platformIcon: String {
+        if item.url.contains("youtube") || item.url.contains("youtu.be") { return "play.rectangle.fill" }
+        if item.url.contains("instagram") { return "camera.fill" }
+        return "globe"
     }
 
     var body: some View {
@@ -737,7 +695,6 @@ struct HistoryItemRow: View {
                     .font(.system(size: 17))
                     .foregroundStyle(platformColor)
             }
-
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.title.isEmpty ? (URL(string: item.url)?.host ?? item.url) : item.title)
                     .font(.subheadline).fontWeight(.medium).lineLimit(1)
@@ -749,9 +706,7 @@ struct HistoryItemRow: View {
                         .font(.caption2).foregroundStyle(.tertiary)
                 }
             }
-
             Spacer()
-
             if isHovered {
                 Button {
                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: item.outputDir)
