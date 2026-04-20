@@ -10,14 +10,16 @@ struct DownloadHistoryItem: Identifiable, Codable {
     let outputDir: String
     let timestamp: Date
     let category: String
+    let thumbnailURL: String
 
-    init(url: String, title: String, outputDir: String, category: String) {
+    init(url: String, title: String, outputDir: String, category: String, thumbnailURL: String = "") {
         self.id = UUID()
         self.url = url
         self.title = title
         self.outputDir = outputDir
         self.timestamp = Date()
         self.category = category
+        self.thumbnailURL = thumbnailURL
     }
 }
 
@@ -47,6 +49,18 @@ final class DownloadManager: ObservableObject {
     @Published var statusText = ""
     @Published var logLines: [String] = []
 
+    // Installation state
+    @Published var isInstalling = false
+    @Published var dependenciesReady = false
+    @Published var ytdlpVersion: String? = nil   // nil = not checked yet, "" = not found
+
+    // Last completed download (for preview card)
+    @Published var lastDownload: DownloadHistoryItem? = nil
+
+    // Metadata parsed live from yt-dlp output
+    private var parsedTitle = ""
+    private var parsedThumbnail = ""
+
     // Queue
     @Published var queue: [QueueItem] = []
     @Published var isProcessingQueue = false
@@ -67,6 +81,52 @@ final class DownloadManager: ObservableObject {
 
     init() {
         loadHistory()
+        checkAndAutoInstall()
+        checkYtdlpVersion()
+    }
+
+    // MARK: - Version check (shows actual installed version)
+
+    func checkYtdlpVersion() {
+        Task {
+            guard let ytdlp = VideoInfoService.shared.findYtdlp() else {
+                ytdlpVersion = ""
+                return
+            }
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: ytdlp)
+            proc.arguments = ["--version"]
+            let pipe = Pipe()
+            proc.standardOutput = pipe
+            proc.standardError = Pipe()
+            do {
+                try proc.run(); proc.waitUntilExit()
+                let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                ytdlpVersion = out.isEmpty ? "" : out
+            } catch {
+                ytdlpVersion = ""
+            }
+        }
+    }
+
+    // MARK: - Auto-install on first launch
+
+    private func checkAndAutoInstall() {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let homeYtdlp = home.appendingPathComponent("bin/yt-dlp").path
+        let brewPaths = ["/usr/local/bin/yt-dlp", "/opt/homebrew/bin/yt-dlp"]
+
+        // Só marca como pronto se tiver versão NÃO-bundled (fresca)
+        let hasFreshYtdlp = FileManager.default.isExecutableFile(atPath: homeYtdlp)
+            || brewPaths.contains { FileManager.default.isExecutableFile(atPath: $0) }
+
+        if hasFreshYtdlp {
+            dependenciesReady = true
+        } else {
+            // Bundle antigo ou nada → baixar versão nova automaticamente
+            installYtdlp()
+        }
     }
 
     // MARK: - Single download
@@ -82,18 +142,13 @@ final class DownloadManager: ObservableObject {
         subLangs: String = "en,pt",
         cookieBrowser: String? = nil
     ) {
-        guard !isDownloading else {
-            print("[DownloadManager] Bloqueado: já está baixando")
-            return
-        }
-        print("[DownloadManager] download() chamado para: \(url)")
+        guard !isDownloading else { return }
         isDownloading = true
         progress = 0
         statusText = "Iniciando..."
         logLines = ["Preparando download de: \(url)"]
 
         Task { @MainActor in
-            print("[DownloadManager] Task iniciada, chamando runDownload")
             await runDownload(
                 url: url, quality: quality, format: format,
                 audioOnly: audioOnly, category: category,
@@ -101,7 +156,6 @@ final class DownloadManager: ObservableObject {
                 subtitles: subtitles, subLangs: subLangs,
                 cookieBrowser: cookieBrowser
             )
-            print("[DownloadManager] runDownload terminou")
             isDownloading = false
         }
     }
@@ -145,7 +199,6 @@ final class DownloadManager: ObservableObject {
                     subtitles: item.subtitles, subLangs: item.subLangs
                 )
 
-                // Check if download succeeded based on statusText
                 queue[i].status = statusText.contains("✅") ? .done : .error
                 isDownloading = false
             }
@@ -165,23 +218,25 @@ final class DownloadManager: ObservableObject {
     // MARK: - Install Dependencies (yt-dlp + ffmpeg)
 
     func installYtdlp() {
+        guard !isInstalling else { return }
+        isInstalling = true
         isDownloading = true
         statusText = "Instalando dependências..."
-        logLines = ["🚀 Instalação automática iniciada"]
+        logLines = ["🚀 Configuração inicial — isso só acontece uma vez"]
         progress = 0
 
         Task {
             let binDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("bin")
             try? FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
-            
+
             // Step 1: Install yt-dlp
-            appendLog("📦 [1/2] Instalando yt-dlp...")
-            statusText = "Instalando yt-dlp..."
-            progress = 25
-            
+            appendLog("📦 [1/2] Baixando yt-dlp...")
+            statusText = "Baixando yt-dlp..."
+            progress = 20
+
             let ytdlpDest = binDir.appendingPathComponent("yt-dlp")
             guard let ytdlpSrc = URL(string: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos") else {
-                statusText = "❌ URL inválida"; isDownloading = false; return
+                statusText = "❌ URL inválida"; isInstalling = false; isDownloading = false; return
             }
 
             do {
@@ -191,118 +246,71 @@ final class DownloadManager: ObservableObject {
                 }
                 try FileManager.default.moveItem(at: tmp, to: ytdlpDest)
                 try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ytdlpDest.path)
-                appendLog("✅ yt-dlp instalado: \(ytdlpDest.path)")
+                appendLog("✅ yt-dlp instalado")
                 progress = 50
             } catch {
                 statusText = "❌ Erro ao instalar yt-dlp"
                 appendLog("Erro: \(error.localizedDescription)")
+                isInstalling = false
                 isDownloading = false
                 return
             }
-            
+
             // Step 2: Install ffmpeg
-            appendLog("")
-            appendLog("📦 [2/2] Instalando ffmpeg...")
-            statusText = "Instalando ffmpeg..."
+            appendLog("📦 [2/2] Baixando ffmpeg...")
+            statusText = "Baixando ffmpeg..."
             progress = 60
-            
-            let success = await installFfmpeg(to: binDir)
-            
-            if success {
-                progress = 100
-                statusText = "✅ Tudo instalado!"
-                appendLog("")
-                appendLog("━━━━━━━━━━━━━━━━━━━━━━━━")
-                appendLog("✅ yt-dlp: \(ytdlpDest.path)")
-                appendLog("✅ ffmpeg: \(binDir.appendingPathComponent("ffmpeg").path)")
-                appendLog("━━━━━━━━━━━━━━━━━━━━━━━━")
-                appendLog("")
-                appendLog("🎉 Pronto! Agora você pode baixar vídeos!")
-                
-                try? await Task.sleep(for: .seconds(3))
-                isDownloading = false
-                progress = 0
+
+            let ffmpegOk = await installFfmpeg(to: binDir)
+
+            progress = 100
+            if ffmpegOk {
+                statusText = "✅ Pronto para usar!"
+                appendLog("✅ ffmpeg instalado")
+                appendLog("🎉 Tudo configurado! Cole um link e clique em Baixar.")
             } else {
-                statusText = "⚠️ yt-dlp OK, ffmpeg falhou"
-                appendLog("")
-                appendLog("⚠️ ffmpeg não foi instalado automaticamente")
-                appendLog("Para melhor qualidade, instale manualmente:")
-                appendLog("brew install ffmpeg")
-                appendLog("")
-                appendLog("Você ainda pode baixar vídeos, mas em formato único.")
-                isDownloading = false
+                statusText = "⚠️ yt-dlp OK · ffmpeg opcional"
+                appendLog("⚠️ ffmpeg não instalado — vídeos serão baixados em formato único")
+                appendLog("Para melhor qualidade: brew install ffmpeg")
             }
+
+            dependenciesReady = true
+            isInstalling = false
+            checkYtdlpVersion()
+            try? await Task.sleep(for: .seconds(2))
+            isDownloading = false
+            progress = 0
+            statusText = ""
         }
     }
-    
+
     private func installFfmpeg(to binDir: URL) async -> Bool {
-        // Detect architecture
-        var systemInfo = utsname()
-        uname(&systemInfo)
-        let machine = withUnsafePointer(to: &systemInfo.machine) {
-            $0.withMemoryRebound(to: CChar.self, capacity: 1) {
-                String(validatingUTF8: $0)
-            }
-        }
-        
-        let isAppleSilicon = machine?.contains("arm64") ?? false
-        
-        // ffmpeg binary URLs (from official static builds)
-        let ffmpegURL: URL?
-        
-        if isAppleSilicon {
-            appendLog("🔍 Detectado: Apple Silicon (M1/M2/M3)")
-            ffmpegURL = URL(string: "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip")
-        } else {
-            appendLog("🔍 Detectado: Intel Mac")
-            ffmpegURL = URL(string: "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip")
-        }
-        
-        guard let url = ffmpegURL else {
-            appendLog("❌ Não foi possível determinar URL do ffmpeg")
-            return false
-        }
-        
+        guard let url = URL(string: "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip") else { return false }
+
         let ffmpegDest = binDir.appendingPathComponent("ffmpeg")
         let zipDest = binDir.appendingPathComponent("ffmpeg.zip")
-        
+
         do {
-            appendLog("⬇️ Baixando ffmpeg...")
             let (tmpZip, _) = try await URLSession.shared.download(from: url)
-            
-            // Move zip to bin dir
             if FileManager.default.fileExists(atPath: zipDest.path) {
                 try? FileManager.default.removeItem(at: zipDest)
             }
             try FileManager.default.moveItem(at: tmpZip, to: zipDest)
-            appendLog("✅ Download completo")
-            
-            // Unzip using system unzip command
-            appendLog("📦 Extraindo ffmpeg...")
-            let unzipProc = Process()
-            unzipProc.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-            unzipProc.arguments = ["-o", zipDest.path, "-d", binDir.path]
-            unzipProc.standardOutput = Pipe()
-            unzipProc.standardError = Pipe()
-            
-            try unzipProc.run()
-            unzipProc.waitUntilExit()
-            
-            // Make executable
+
+            let unzip = Process()
+            unzip.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+            unzip.arguments = ["-o", zipDest.path, "-d", binDir.path]
+            unzip.standardOutput = Pipe(); unzip.standardError = Pipe()
+            try unzip.run(); unzip.waitUntilExit()
+
             if FileManager.default.fileExists(atPath: ffmpegDest.path) {
                 try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ffmpegDest.path)
-                appendLog("✅ ffmpeg instalado e pronto para uso")
-                
-                // Clean up zip
                 try? FileManager.default.removeItem(at: zipDest)
-                
                 return true
-            } else {
-                appendLog("⚠️ ffmpeg não encontrado após extração")
-                return false
             }
+            return false
         } catch {
-            appendLog("❌ Erro ao instalar ffmpeg: \(error.localizedDescription)")
+            appendLog("ffmpeg: \(error.localizedDescription)")
             return false
         }
     }
@@ -335,13 +343,9 @@ final class DownloadManager: ObservableObject {
         subtitles: Bool, subLangs: String,
         cookieBrowser: String? = nil
     ) async {
-        print("[DownloadManager] runDownload ENTROU")
-        let ytdlpPath = VideoInfoService.shared.findYtdlp()
-        print("[DownloadManager] findYtdlp returned: \(ytdlpPath ?? "nil")")
-        
-        guard let ytdlp = ytdlpPath else {
-            statusText = "❌ yt-dlp não encontrado"
-            appendLog("yt-dlp não encontrado. Instale com: brew install yt-dlp")
+        guard let ytdlp = VideoInfoService.shared.findYtdlp() else {
+            statusText = "❌ yt-dlp não encontrado — clique em Instalar"
+            appendLog("yt-dlp não encontrado. Clique em Instalar dependências.")
             return
         }
 
@@ -351,8 +355,7 @@ final class DownloadManager: ObservableObject {
             .appendingPathComponent("Downloads/YTool")
         let platform = detectPlatform(url)
         let outputDir = baseDir.appendingPathComponent("\(platform)/\(category)")
-        
-        print("[DownloadManager] Criando pasta: \(outputDir.path)")
+
         do {
             try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
         } catch {
@@ -362,10 +365,16 @@ final class DownloadManager: ObservableObject {
         let name = customFilename.isEmpty ? "%(title)s" : sanitizeFilename(customFilename)
         let outputTemplate = outputDir.appendingPathComponent("\(name).%(ext)s").path
 
+        // Reset parsed metadata for this download
+        parsedTitle = ""
+        parsedThumbnail = ""
+
         var args = [
             "--newline",
             "--no-playlist",
             "--remote-components", "ejs:github",
+            "--print", "YTOOL_TITLE:%(title)s",
+            "--print", "YTOOL_THUMB:%(thumbnail)s",
             "-o", outputTemplate,
             "--user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -374,14 +383,16 @@ final class DownloadManager: ObservableObject {
             "--no-update"
         ]
 
-        // Check if ffmpeg is available
-        let hasFfmpeg = FileManager.default.fileExists(atPath: "/usr/local/bin/ffmpeg") ||
-                       FileManager.default.fileExists(atPath: "/opt/homebrew/bin/ffmpeg")
-        
+        // Check ffmpeg availability (bundled or system)
+        let bundledBin = VideoInfoService.shared.bundledBinDir() ?? ""
+        let hasFfmpeg = FileManager.default.fileExists(atPath: bundledBin + "/ffmpeg") ||
+                        FileManager.default.fileExists(atPath: NSHomeDirectory() + "/bin/ffmpeg") ||
+                        FileManager.default.fileExists(atPath: "/usr/local/bin/ffmpeg") ||
+                        FileManager.default.fileExists(atPath: "/opt/homebrew/bin/ffmpeg")
+
         if audioOnly {
             args += ["-x", "--audio-format", "mp3"]
         } else if hasFfmpeg {
-            // ffmpeg available - can merge video+audio
             if quality != "best" {
                 let h = quality.replacingOccurrences(of: "p", with: "")
                 args += ["-f", "bestvideo[height<=\(h)]+bestaudio/best[height<=\(h)]",
@@ -390,7 +401,6 @@ final class DownloadManager: ObservableObject {
                 args += ["-f", "bestvideo+bestaudio/best", "--merge-output-format", format]
             }
         } else {
-            // No ffmpeg - download single format (already merged)
             appendLog("⚠️ ffmpeg não encontrado - baixando formato único")
             if quality != "best" {
                 let h = quality.replacingOccurrences(of: "p", with: "")
@@ -407,25 +417,21 @@ final class DownloadManager: ObservableObject {
                      "--ignore-errors"]
         }
 
-        // Auto cookies from browser (member content support)
         if let browser = cookieBrowser, !browser.isEmpty {
             args += ["--cookies-from-browser", browser]
             appendLog("Usando cookies do \(browser)")
         }
 
         args.append(url)
-        print("[DownloadManager] Template: \(outputTemplate)")
-        print("[DownloadManager] Args: \(args)")
         appendLog("Comando: yt-dlp \(args.joined(separator: " "))")
         statusText = "Baixando..."
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: ytdlp)
         proc.arguments = args
-        // Herda PATH com binários bundled (ffmpeg) + sistema
+
         var env = ProcessInfo.processInfo.environment
-        let bundledBin = VideoInfoService.shared.bundledBinDir() ?? ""
-        let extraPaths = [bundledBin, "/usr/local/bin", "/opt/homebrew/bin", NSHomeDirectory() + "/bin"]
+        let extraPaths = [bundledBin, NSHomeDirectory() + "/bin", "/usr/local/bin", "/opt/homebrew/bin"]
             .filter { !$0.isEmpty }
             .joined(separator: ":")
         env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin")
@@ -436,45 +442,34 @@ final class DownloadManager: ObservableObject {
         proc.standardError = pipe
         self.process = proc
 
-        print("[DownloadManager] Tentando proc.run()...")
         do {
             try proc.run()
-            print("[DownloadManager] proc.run() OK, pid=\(proc.processIdentifier)")
         } catch {
-            print("[DownloadManager] proc.run() FALHOU: \(error)")
             statusText = "❌ Erro ao executar yt-dlp"
             appendLog(error.localizedDescription)
             return
         }
 
-        // Stream output line-by-line in real time
-        print("[DownloadManager] Streaming output em tempo real...")
         let fileHandle = pipe.fileHandleForReading
-
         let mgr = self
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             Task.detached {
                 var buffer = Data()
                 while true {
                     let chunk = fileHandle.availableData
-                    if chunk.isEmpty { break } // EOF = process finished
+                    if chunk.isEmpty { break }
                     buffer.append(chunk)
-
-                    // Split on newlines and parse each line
                     while let range = buffer.range(of: Data([0x0A])) {
                         let lineData = buffer.subdata(in: buffer.startIndex..<range.lowerBound)
                         buffer.removeSubrange(buffer.startIndex...range.lowerBound)
                         if let line = String(data: lineData, encoding: .utf8)?
                             .trimmingCharacters(in: .whitespacesAndNewlines), !line.isEmpty {
-                            print("[yt-dlp] \(line)")
                             await mgr.parseLine(line)
                         }
                     }
                 }
-                // Process remaining buffer
                 if let rest = String(data: buffer, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines), !rest.isEmpty {
-                    print("[yt-dlp] \(rest)")
                     await mgr.parseLine(rest)
                 }
                 continuation.resume()
@@ -482,16 +477,17 @@ final class DownloadManager: ObservableObject {
         }
 
         let exitCode = proc.terminationStatus
-        print("[DownloadManager] Processo terminou. Exit: \(exitCode)")
-
         if exitCode == 0 {
             progress = 100
             statusText = "✅ Concluído!"
-            let title = videoInfo?.title ?? ""
+            let title = parsedTitle.isEmpty ? (videoInfo?.title ?? "") : parsedTitle
+            let thumb = parsedThumbnail.isEmpty ? (videoInfo?.thumbnail ?? "") : parsedThumbnail
             let item = DownloadHistoryItem(
                 url: url, title: title,
-                outputDir: outputDir.path, category: category
+                outputDir: outputDir.path, category: category,
+                thumbnailURL: thumb
             )
+            lastDownload = item
             history.insert(item, at: 0)
             if history.count > 100 { history = Array(history.prefix(100)) }
             saveHistory()
@@ -503,6 +499,19 @@ final class DownloadManager: ObservableObject {
     // MARK: - Helpers
 
     private func parseLine(_ line: String) {
+        // Capture metadata printed by --print flags
+        if line.hasPrefix("YTOOL_TITLE:") {
+            let val = String(line.dropFirst("YTOOL_TITLE:".count))
+            if !val.isEmpty && val != "NA" { parsedTitle = val }
+            return
+        }
+        if line.hasPrefix("YTOOL_THUMB:") {
+            let val = String(line.dropFirst("YTOOL_THUMB:".count))
+            if !val.isEmpty && val != "NA" && val.hasPrefix("http") { parsedThumbnail = val }
+            return
+        }
+
+        // Progress line
         let pattern = #"\[download\]\s+([\d.]+)%\s+of\s+(\S+)\s+at\s+(Unknown B/s|Unknown|\S+)\s+ETA\s+(\S+)"#
         if let regex = try? NSRegularExpression(pattern: pattern),
            let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) {
@@ -510,7 +519,6 @@ final class DownloadManager: ObservableObject {
             let pctStr = nsLine.substring(with: match.range(at: 1))
             let speed  = nsLine.substring(with: match.range(at: 3))
             let eta    = nsLine.substring(with: match.range(at: 4))
-
             if let pct = Double(pctStr) {
                 progress = pct
                 statusText = "Baixando · \(speed) · ETA \(eta)"
@@ -537,4 +545,3 @@ final class DownloadManager: ObservableObject {
             .trimmingCharacters(in: .whitespaces)
     }
 }
-

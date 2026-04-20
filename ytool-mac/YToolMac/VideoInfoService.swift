@@ -55,52 +55,54 @@ enum VideoInfoError: LocalizedError {
 final class VideoInfoService: Sendable {
     static let shared = VideoInfoService()
 
-    // Procura yt-dlp: primeiro no bundle do app, depois no sistema
+    // Procura yt-dlp: prefere versão instalada fresca, bundle como último recurso
     private var searchPaths: [String] {
         var paths: [String] = []
-        // 1. Bundled com o app (YToolMac_YToolMac.bundle/bin/)
-        if let bundleURL = Bundle.main.resourceURL {
-            // Swift Package resources ficam em YToolMac_YToolMac.bundle
-            let bundledPath = bundleURL
-                .appendingPathComponent("YToolMac_YToolMac.bundle")
-                .appendingPathComponent("bin")
-                .appendingPathComponent("yt-dlp")
-            paths.append(bundledPath.path)
-            // Também tenta direto no bundle
-            let directPath = bundleURL
-                .appendingPathComponent("bin")
-                .appendingPathComponent("yt-dlp")
-            paths.append(directPath.path)
+        
+        // 1. Dentro do .app bundle (Resources/bin/)
+        if let resURL = Bundle.main.resourceURL {
+            paths.append(resURL.appendingPathComponent("bin/yt-dlp").path)
         }
-        // 2. Tenta via Bundle.module (Swift Package)
-        if let moduleBundle = Bundle(identifier: "YToolMac.YToolMac") ?? Bundle.allBundles.first(where: { $0.bundlePath.contains("YToolMac_YToolMac") }) {
-            let modulePath = moduleBundle.bundleURL
-                .appendingPathComponent("bin")
-                .appendingPathComponent("yt-dlp")
-            paths.append(modulePath.path)
+        // Também tenta via executableURL (pra .app standalone)
+        if let execURL = Bundle.main.executableURL {
+            let appBin = execURL.deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Resources/bin/yt-dlp")
+            paths.append(appBin.path)
         }
-        // 3. Sistema
-        paths.append(contentsOf: [
-            NSHomeDirectory() + "/bin/yt-dlp",
-            "/usr/local/bin/yt-dlp",
-            "/opt/homebrew/bin/yt-dlp",
-        ])
+        
+        // 2. Instalado pelo usuário
+        paths.append(NSHomeDirectory() + "/bin/yt-dlp")
+        
+        // 3. Homebrew
+        paths.append("/usr/local/bin/yt-dlp")
+        paths.append("/opt/homebrew/bin/yt-dlp")
+        
+        // 4. SPM bundle (quando roda via Xcode)
+        if let resURL = Bundle.main.resourceURL {
+            paths.append(resURL.appendingPathComponent("YToolMac_YToolMac.bundle/bin/yt-dlp").path)
+        }
+        
         return paths
     }
 
-    /// Retorna o diretório dos binários bundled (ffmpeg, etc)
     func bundledBinDir() -> String? {
-        if let bundleURL = Bundle.main.resourceURL {
-            let path1 = bundleURL
-                .appendingPathComponent("YToolMac_YToolMac.bundle")
-                .appendingPathComponent("bin")
-            if FileManager.default.fileExists(atPath: path1.path) { return path1.path }
-            let path2 = bundleURL.appendingPathComponent("bin")
-            if FileManager.default.fileExists(atPath: path2.path) { return path2.path }
+        // Tenta Resources/bin/ primeiro
+        if let resURL = Bundle.main.resourceURL {
+            let p = resURL.appendingPathComponent("bin")
+            if FileManager.default.fileExists(atPath: p.path) { return p.path }
         }
-        if let moduleBundle = Bundle(identifier: "YToolMac.YToolMac") ?? Bundle.allBundles.first(where: { $0.bundlePath.contains("YToolMac_YToolMac") }) {
-            let path = moduleBundle.bundleURL.appendingPathComponent("bin")
-            if FileManager.default.fileExists(atPath: path.path) { return path.path }
+        // Tenta via executable path
+        if let execURL = Bundle.main.executableURL {
+            let p = execURL.deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Resources/bin")
+            if FileManager.default.fileExists(atPath: p.path) { return p.path }
+        }
+        // SPM bundle
+        if let resURL = Bundle.main.resourceURL {
+            let p = resURL.appendingPathComponent("YToolMac_YToolMac.bundle/bin")
+            if FileManager.default.fileExists(atPath: p.path) { return p.path }
         }
         return nil
     }

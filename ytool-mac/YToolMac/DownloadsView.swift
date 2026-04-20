@@ -21,7 +21,7 @@ struct FocusableTextField: NSViewRepresentable {
         field.isBezeled = false
         field.drawsBackground = false
         field.allowsEditingTextAttributes = false
-        field.font = .systemFont(ofSize: 14)
+        field.font = .systemFont(ofSize: 16)
         field.lineBreakMode = .byTruncatingTail
         field.cell?.sendsActionOnEndEditing = false
         context.coordinator.field = field
@@ -80,10 +80,6 @@ func detectDefaultBrowser() -> String {
 // MARK: - Main Download View
 
 struct SingleDownloadView: View {
-    let platform: String
-    let platformName: String
-    let accentColor: Color
-
     @EnvironmentObject private var manager: DownloadManager
 
     @State private var url = ""
@@ -94,286 +90,395 @@ struct SingleDownloadView: View {
     @State private var customFilename = ""
     @State private var subtitles = false
     @State private var subLangs = "en,pt"
-    @State private var inspectError: String?
-    @State private var videoInfo: VideoInfo?
-    @State private var selectedFormatID: String?
+    @State private var showOptions = false
 
-    private let qualities: [(label: String, value: String)] = [
-        ("Melhor disponível", "best"), ("4K Ultra HD", "2160p"),
-        ("1080p Full HD", "1080p"), ("720p HD", "720p"),
-        ("480p", "480p"), ("360p", "360p")
-    ]
-    private let formats: [(label: String, value: String)] = [
-        ("MP4 (recomendado)", "mp4"), ("WebM", "webm"), ("MKV", "mkv")
-    ]
     private let categories = [
-        "Música", "Tutoriais", "Filmes", "Séries", "Clips",
+        "Clips", "Música", "Tutoriais", "Filmes", "Séries",
         "Podcasts", "Gameplay", "Educação", "Vlogs", "Outros"
     ]
 
     var body: some View {
-        HSplitView {
-            mainPanel
-                .frame(minWidth: 500, idealWidth: 640)
-            historyPanel
-                .frame(minWidth: 180, idealWidth: 220)
-        }
-        .background(Color(.windowBackgroundColor))
-    }
+        ZStack(alignment: .top) {
+            gradientBackground
+            ScrollView {
+                VStack(spacing: 28) {
+                    Spacer().frame(height: 36)
 
-    // MARK: - Main Panel
-
-    private var mainPanel: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                heroHeader
-                VStack(spacing: 16) {
-                    urlCard
-                    if let info = videoInfo { previewCard(info) }
-                    if let fmts = videoInfo?.formats, !fmts.isEmpty { formatsCard(fmts) }
-                    optionsCard
-                    downloadButton
-                    if manager.isDownloading || manager.progress > 0 { progressCard }
-                }
-                .padding(20)
-            }
-        }
-    }
-
-    // MARK: - Hero Header
-
-    private var heroHeader: some View {
-        ZStack(alignment: .bottomLeading) {
-            LinearGradient(
-                colors: platform == "youtube"
-                    ? [accentColor.opacity(0.85), accentColor.opacity(0.4)]
-                    : [Color.purple.opacity(0.7), accentColor.opacity(0.5)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .frame(height: 90)
-
-            HStack(spacing: 12) {
-                Image(systemName: platform == "youtube" ? "play.rectangle.fill" : "camera.fill")
-                    .font(.system(size: 28, weight: .bold))
-                    .foregroundStyle(.white)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(platformName)
-                        .font(.title2).fontWeight(.bold).foregroundStyle(.white)
-                    Text(platform == "youtube" ? "Vídeos, Shorts, Músicas — até 4K" : "Posts, Reels e Stories públicos")
-                        .font(.caption).foregroundStyle(.white.opacity(0.8))
-                }
-            }
-            .padding(.horizontal, 20).padding(.bottom, 16)
-        }
-    }
-
-    // MARK: - URL Card
-
-    private var urlCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("URL DO VÍDEO")
-                .font(.caption).fontWeight(.semibold)
-                .foregroundStyle(.secondary)
-                .tracking(0.5)
-
-            HStack(spacing: 0) {
-                Image(systemName: "link")
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 36)
-
-                FocusableTextField(
-                    text: $url,
-                    placeholder: "Cole o link aqui...",
-                    onCommit: startDownload
-                )
-
-                if !url.isEmpty {
-                    Button { clearAll() } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.tertiary)
-                            .padding(.trailing, 8)
+                    // Setup banner (when dependencies are missing/installing)
+                    if !manager.dependenciesReady {
+                        setupBanner.padding(.horizontal, 28)
                     }
-                    .buttonStyle(.plain)
-                }
 
-                Divider().frame(height: 20).padding(.trailing, 8)
-
-                Button {
-                    if let s = NSPasteboard.general.string(forType: .string)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
-                        url = s
+                    controlsCard
+                    if manager.isDownloading || manager.progress > 0 {
+                        progressCard.padding(.horizontal, 28)
                     }
-                } label: {
-                    Image(systemName: "doc.on.clipboard")
-                        .foregroundStyle(accentColor)
-                        .padding(.trailing, 10)
+                    if let item = manager.lastDownload, !manager.isDownloading {
+                        completionCard(item).padding(.horizontal, 28)
+                    }
+                    if !manager.history.isEmpty {
+                        historySection.padding(.horizontal, 28)
+                    }
+                    Spacer().frame(height: 32)
                 }
-                .buttonStyle(.plain)
-                .help("Colar da área de transferência")
             }
-            .frame(height: 46)
-            .background(Color(.controlBackgroundColor))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Completion Preview Card
+
+    private func completionCard(_ item: DownloadHistoryItem) -> some View {
+        HStack(spacing: 16) {
+            // Thumbnail
+            Group {
+                if !item.thumbnailURL.isEmpty, let u = URL(string: item.thumbnailURL) {
+                    AsyncImage(url: u) { phase in
+                        if case .success(let img) = phase {
+                            img.resizable().aspectRatio(contentMode: .fill)
+                        } else {
+                            Rectangle().fill(Color.green.opacity(0.15))
+                                .overlay(Image(systemName: "checkmark.circle.fill")
+                                    .font(.title).foregroundStyle(.green))
+                        }
+                    }
+                } else {
+                    Rectangle().fill(Color.green.opacity(0.15))
+                        .overlay(Image(systemName: "checkmark.circle.fill")
+                            .font(.title).foregroundStyle(.green))
+                }
+            }
+            .frame(width: 120, height: 68)
             .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(.separatorColor), lineWidth: 1))
-
-            if let err = inspectError {
-                Label(err, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(.orange)
-            }
-        }
-    }
-
-    // MARK: - Preview Card
-
-    private func previewCard(_ info: VideoInfo) -> some View {
-        HStack(spacing: 14) {
-            AsyncImage(url: URL(string: info.thumbnail)) { img in
-                img.resizable().aspectRatio(contentMode: .fill)
-            } placeholder: {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(accentColor.opacity(0.1))
-                    .overlay(Image(systemName: "photo").foregroundStyle(.quaternary))
-            }
-            .frame(width: 140, height: 80)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(info.title)
-                    .font(.subheadline).fontWeight(.semibold).lineLimit(2)
-                HStack(spacing: 12) {
-                    if !info.uploader.isEmpty {
-                        Label(info.uploader, systemImage: "person.fill")
-                            .font(.caption).foregroundStyle(.secondary)
+                Label("Download concluído!", systemImage: "checkmark.circle.fill")
+                    .font(.subheadline).fontWeight(.semibold)
+                    .foregroundStyle(.green)
+                Text(item.title.isEmpty ? "Arquivo salvo" : item.title)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                HStack(spacing: 10) {
+                    Button {
+                        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: item.outputDir)
+                    } label: {
+                        Label("Ver no Finder", systemImage: "folder")
+                            .font(.caption).fontWeight(.medium)
                     }
-                    if info.duration > 0 {
-                        Label(info.durationFormatted, systemImage: "clock")
-                            .font(.caption).foregroundStyle(.secondary)
+                    .buttonStyle(.bordered)
+                    .clipShape(Capsule())
+
+                    Button {
+                        if let files = try? FileManager.default.contentsOfDirectory(atPath: item.outputDir),
+                           let file = files.first {
+                            let full = (item.outputDir as NSString).appendingPathComponent(file)
+                            NSWorkspace.shared.open(URL(fileURLWithPath: full))
+                        }
+                    } label: {
+                        Label("Reproduzir", systemImage: "play.fill")
+                            .font(.caption).fontWeight(.medium)
                     }
-                }
-                if !info.formats.isEmpty {
-                    Text("\(info.formats.count) formatos · \(info.formats.filter { $0.kind != .audioOnly }.count) vídeo · \(info.formats.filter { $0.kind == .audioOnly }.count) áudio")
-                        .font(.caption2).foregroundStyle(.tertiary)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .clipShape(Capsule())
                 }
             }
-            Spacer(minLength: 0)
+
+            Spacer()
+
+            Button { manager.lastDownload = nil } label: {
+                Image(systemName: "xmark").font(.caption).foregroundStyle(.tertiary)
+            }.buttonStyle(.plain)
         }
         .padding(14)
-        .background(accentColor.opacity(0.06))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(accentColor.opacity(0.15), lineWidth: 1))
+        .background(Color.green.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16)
+            .strokeBorder(Color.green.opacity(0.25), lineWidth: 1))
+        .transition(.move(edge: .top).combined(with: .opacity))
+        .animation(.spring(response: 0.4), value: manager.lastDownload != nil)
     }
 
-    // MARK: - Formats Card
+    // MARK: - Setup Banner
 
-    private func formatsCard(_ fmts: [VideoFormat]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("FORMATOS DISPONÍVEIS")
-                    .font(.caption2).fontWeight(.semibold)
-                    .foregroundStyle(.secondary).tracking(0.5)
+    @State private var showTerminalTip = false
+
+    private var setupBanner: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Image(systemName: manager.isInstalling
+                      ? "arrow.down.circle" : "exclamationmark.triangle.fill")
+                    .font(.title3)
+                    .foregroundStyle(manager.isInstalling ? .blue : .orange)
+                    .symbolEffect(.pulse, isActive: manager.isInstalling)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(manager.isInstalling
+                         ? "Instalando dependências..."
+                         : "Dependências não encontradas")
+                        .font(.subheadline).fontWeight(.semibold)
+                    Text(manager.isInstalling
+                         ? manager.statusText
+                         : "yt-dlp e ffmpeg são necessários para baixar vídeos")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
                 Spacer()
-                Text("\(fmts.count) disponíveis")
-                    .font(.caption2).foregroundStyle(.tertiary)
+
+                if !manager.isInstalling {
+                    Button {
+                        manager.installYtdlp()
+                    } label: {
+                        Label("Instalar agora", systemImage: "arrow.down.circle.fill")
+                            .font(.subheadline).fontWeight(.semibold)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+                }
             }
 
-            ScrollView {
-                LazyVStack(spacing: 3) {
-                    ForEach(fmts) { fmt in
-                        Button {
-                            selectedFormatID = selectedFormatID == fmt.id ? nil : fmt.id
-                        } label: {
-                            HStack(spacing: 10) {
-                                Text(fmt.kind.emoji).frame(width: 22)
-                                Text(fmt.label).font(.caption).lineLimit(1)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                if selectedFormatID == fmt.id {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(accentColor).font(.caption)
-                                }
-                            }
-                            .padding(.horizontal, 10).padding(.vertical, 6)
-                            .background(selectedFormatID == fmt.id
-                                ? accentColor.opacity(0.12) : Color.clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                        .buttonStyle(.plain)
+            if manager.isInstalling && manager.progress > 0 {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 3).fill(Color.blue.opacity(0.2)).frame(height: 5)
+                        RoundedRectangle(cornerRadius: 3).fill(Color.blue)
+                            .frame(width: geo.size.width * manager.progress / 100, height: 5)
+                            .animation(.linear(duration: 0.3), value: manager.progress)
+                    }
+                }.frame(height: 5)
+            }
+
+            // Version status
+            if let ver = manager.ytdlpVersion {
+                HStack(spacing: 6) {
+                    Image(systemName: ver.isEmpty ? "xmark.circle.fill" : "checkmark.circle.fill")
+                        .foregroundStyle(ver.isEmpty ? .red : .green)
+                        .font(.caption)
+                    Text(ver.isEmpty
+                         ? "yt-dlp: não encontrado"
+                         : "yt-dlp \(ver) ✓")
+                        .font(.caption).foregroundStyle(ver.isEmpty ? .red : .green)
+                    Spacer()
+                    Button { manager.checkYtdlpVersion() } label: {
+                        Image(systemName: "arrow.clockwise").font(.caption2)
+                    }.buttonStyle(.plain).foregroundStyle(.secondary)
+                }
+            }
+
+            // Terminal fallback
+            DisclosureGroup(isExpanded: $showTerminalTip) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Ou instale manualmente pelo Terminal:")
+                        .font(.caption).foregroundStyle(.secondary)
+                    terminalCommand("brew install yt-dlp ffmpeg")
+                    Text("Se não tiver Homebrew:")
+                        .font(.caption).foregroundStyle(.tertiary)
+                    terminalCommand("/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"")
+                }
+                .padding(.top, 6)
+            } label: {
+                Text("Instalar pelo Terminal (alternativa)")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(16)
+        .background(Color.orange.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16)
+            .strokeBorder(Color.orange.opacity(0.25), lineWidth: 1))
+    }
+
+    private func terminalCommand(_ cmd: String) -> some View {
+        HStack(spacing: 8) {
+            Text(cmd)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(cmd, forType: .string)
+            } label: {
+                Image(systemName: "doc.on.clipboard")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Copiar")
+        }
+        .padding(10)
+        .background(Color(.textBackgroundColor).opacity(0.8))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: - Gradient Background
+
+    private var gradientBackground: some View {
+        ZStack {
+            Color(.windowBackgroundColor)
+            Circle()
+                .fill(Color.red.opacity(0.30))
+                .frame(width: 550)
+                .blur(radius: 100)
+                .offset(x: -200, y: -170)
+            Circle()
+                .fill(Color.blue.opacity(0.16))
+                .frame(width: 460)
+                .blur(radius: 100)
+                .offset(x: 300, y: -140)
+            Circle()
+                .fill(Color.pink.opacity(0.18))
+                .frame(width: 380)
+                .blur(radius: 80)
+                .offset(x: 80, y: 60)
+        }
+        .ignoresSafeArea()
+    }
+
+    // MARK: - Controls Card
+
+    private var controlsCard: some View {
+        VStack(spacing: 20) {
+            urlBar
+            qualityFormatRow
+            downloadButton
+            if showOptions { optionsExtra }
+        }
+        .padding(.horizontal, 26).padding(.vertical, 22)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 24))
+        .shadow(color: .black.opacity(0.12), radius: 24, y: 4)
+        .padding(.horizontal, 28)
+    }
+
+    // MARK: - URL Bar
+
+    private var urlBar: some View {
+        HStack(spacing: 0) {
+            Image(systemName: "link")
+                .foregroundStyle(.tertiary)
+                .frame(width: 44)
+                .font(.system(size: 16))
+
+            FocusableTextField(
+                text: $url,
+                placeholder: "Cole o link aqui...",
+                onCommit: startDownload
+            )
+
+            if !url.isEmpty {
+                Button { url = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
+                        .padding(.trailing, 6)
+                }.buttonStyle(.plain)
+            }
+
+            Button {
+                if let s = NSPasteboard.general.string(forType: .string)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+                    url = s
+                }
+            } label: {
+                Image(systemName: "doc.on.clipboard")
+                    .foregroundStyle(.red)
+                    .font(.system(size: 17))
+                    .padding(.trailing, 16)
+            }
+            .buttonStyle(.plain)
+            .help("Colar da área de transferência")
+        }
+        .frame(height: 56)
+        .background(Color(.textBackgroundColor).opacity(0.65))
+        .clipShape(RoundedRectangle(cornerRadius: 28))
+        .overlay(RoundedRectangle(cornerRadius: 28)
+            .strokeBorder(Color(.separatorColor).opacity(0.5), lineWidth: 1))
+    }
+
+    // MARK: - Quality + Format Pills
+
+    private var qualityFormatRow: some View {
+        HStack(spacing: 0) {
+            // Quality label
+            Text("QUALIDADE")
+                .font(.caption2).fontWeight(.semibold)
+                .foregroundStyle(.secondary).tracking(0.5)
+                .padding(.trailing, 8)
+
+            // Quality pills
+            HStack(spacing: 6) {
+                ForEach([("Melhor","best"),("4K","2160p"),("1080p","1080p"),("720p","720p"),("480p","480p")], id: \.1) { label, val in
+                    pill(label, selected: quality == val && !audioOnly) {
+                        quality = val; audioOnly = false
                     }
                 }
             }
-            .frame(maxHeight: 180)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(.separatorColor), lineWidth: 1))
 
-            if selectedFormatID != nil {
-                Label("Formato específico selecionado — opções abaixo ignoradas", systemImage: "info.circle")
-                    .font(.caption2).foregroundStyle(.secondary)
+            Divider().frame(height: 24).padding(.horizontal, 14)
+
+            // Format label
+            Text("FORMATO")
+                .font(.caption2).fontWeight(.semibold)
+                .foregroundStyle(.secondary).tracking(0.5)
+                .padding(.trailing, 8)
+
+            // Format pills
+            HStack(spacing: 6) {
+                pill("MP4",  selected: !audioOnly && format == "mp4")  { audioOnly = false; format = "mp4" }
+                pill("WebM", selected: !audioOnly && format == "webm") { audioOnly = false; format = "webm" }
+                pill("MKV",  selected: !audioOnly && format == "mkv")  { audioOnly = false; format = "mkv" }
+                pill("MP3",  selected: audioOnly)                      { audioOnly = true;  format = "mp3" }
             }
+
+            Spacer()
+
+            Button {
+                withAnimation(.spring(response: 0.3)) { showOptions.toggle() }
+            } label: {
+                Image(systemName: showOptions ? "slider.horizontal.3" : "slider.horizontal.3")
+                    .foregroundStyle(showOptions ? Color.red : .secondary)
+                    .font(.system(size: 15))
+            }
+            .buttonStyle(.plain)
+            .help("Opções")
         }
     }
 
-    // MARK: - Options Card
+    private func pill(_ label: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.subheadline).fontWeight(selected ? .semibold : .regular)
+                .padding(.horizontal, 14).padding(.vertical, 7)
+                .background(selected ? Color.red : Color(.controlBackgroundColor))
+                .foregroundStyle(selected ? .white : .primary)
+                .clipShape(Capsule())
+                .animation(.easeInOut(duration: 0.15), value: selected)
+        }
+        .buttonStyle(.plain)
+    }
 
-    private var optionsCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            // Quality row
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 4) {
-                    Image(systemName: "sparkles").font(.caption).foregroundStyle(accentColor.opacity(0.8))
-                    Text("QUALIDADE").font(.caption).fontWeight(.semibold).foregroundStyle(.secondary).tracking(0.5)
-                }
-                HStack(spacing: 8) {
-                    ForEach([
-                        ("Melhor", "best",   "crown.fill"),
-                        ("4K",    "2160p",  "4.square.fill"),
-                        ("1080p", "1080p",  "tv"),
-                        ("720p",  "720p",   "display"),
-                        ("480p",  "480p",   "iphone"),
-                    ], id: \.1) { label, value, icon in
-                        qualityPill(label: label, value: value, icon: icon, binding: $quality)
-                    }
-                }
-            }
+    // MARK: - Options (expandable)
 
+    private var optionsExtra: some View {
+        VStack(alignment: .leading, spacing: 12) {
             Divider()
-
-            // Format row
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 4) {
-                    Image(systemName: "doc.fill").font(.caption).foregroundStyle(accentColor.opacity(0.8))
-                    Text("FORMATO").font(.caption).fontWeight(.semibold).foregroundStyle(.secondary).tracking(0.5)
-                }
-                HStack(spacing: 8) {
-                    formatPill(label: "MP4", icon: "film.fill",  isAudio: false, fmtValue: "mp4")
-                    formatPill(label: "WebM", icon: "play.fill", isAudio: false, fmtValue: "webm")
-                    formatPill(label: "MKV",  icon: "archivebox.fill", isAudio: false, fmtValue: "mkv")
-                    formatPill(label: "MP3",  icon: "music.note", isAudio: true,  fmtValue: "mp3")
-                }
-            }
-
-            Divider()
-
-            // Category + extras
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "folder.fill").font(.caption).foregroundStyle(accentColor.opacity(0.8))
-                        Text("CATEGORIA").font(.caption).fontWeight(.semibold).foregroundStyle(.secondary).tracking(0.5)
-                    }
+            HStack(spacing: 20) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Categoria", systemImage: "folder.fill")
+                        .font(.caption).foregroundStyle(.secondary)
                     Picker("", selection: $category) {
                         ForEach(categories, id: \.self) { Text($0) }
                     }.pickerStyle(.menu).labelsHidden().frame(maxWidth: 140)
                 }
-
-                Spacer()
-
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "text.quote").font(.caption).foregroundStyle(accentColor.opacity(0.8))
-                        Text("LEGENDAS").font(.caption).fontWeight(.semibold).foregroundStyle(.secondary).tracking(0.5)
-                    }
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Nome do arquivo", systemImage: "pencil")
+                        .font(.caption).foregroundStyle(.secondary)
+                    TextField("Título do vídeo (padrão)", text: $customFilename)
+                        .textFieldStyle(.roundedBorder).frame(maxWidth: 200)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Legendas", systemImage: "text.quote")
+                        .font(.caption).foregroundStyle(.secondary)
                     HStack {
-                        Toggle("", isOn: $subtitles).toggleStyle(.switch).tint(accentColor).labelsHidden()
+                        Toggle("", isOn: $subtitles).toggleStyle(.switch).tint(.red).labelsHidden()
                         if subtitles {
                             TextField("en,pt", text: $subLangs)
                                 .textFieldStyle(.roundedBorder).frame(maxWidth: 80).font(.caption)
@@ -381,105 +486,38 @@ struct SingleDownloadView: View {
                     }
                 }
             }
-
-            Divider()
-
-            // Filename
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 4) {
-                    Image(systemName: "pencil").font(.caption).foregroundStyle(accentColor.opacity(0.8))
-                    Text("NOME DO ARQUIVO").font(.caption).fontWeight(.semibold).foregroundStyle(.secondary).tracking(0.5)
-                }
-                TextField("Deixe vazio para usar o título do vídeo", text: $customFilename)
-                    .textFieldStyle(.roundedBorder).font(.callout)
-            }
         }
-        .padding(16)
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color(.separatorColor), lineWidth: 1))
-    }
-
-    private func qualityPill(label: String, value: String, icon: String, binding: Binding<String>) -> some View {
-        let selected = binding.wrappedValue == value
-        return Button {
-            binding.wrappedValue = value
-            if value == "2160p" || value == "1080p" || value == "720p" || value == "480p" || value == "best" {
-                audioOnly = false
-            }
-        } label: {
-            VStack(spacing: 3) {
-                Image(systemName: icon)
-                    .font(.system(size: 16, weight: .medium))
-                Text(label).font(.caption).fontWeight(selected ? .semibold : .regular)
-            }
-            .frame(width: 58, height: 48)
-            .background(selected ? accentColor : Color(.controlBackgroundColor))
-            .foregroundStyle(selected ? .white : .primary)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(selected ? accentColor : Color(.separatorColor), lineWidth: selected ? 0 : 1))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func formatPill(label: String, icon: String, isAudio: Bool, fmtValue: String) -> some View {
-        let selected = isAudio ? audioOnly : (!audioOnly && format == fmtValue)
-        return Button {
-            if isAudio {
-                audioOnly = true
-                format = "mp3"
-            } else {
-                audioOnly = false
-                format = fmtValue
-            }
-        } label: {
-            VStack(spacing: 3) {
-                Image(systemName: icon)
-                    .font(.system(size: 16, weight: .medium))
-                Text(label).font(.caption).fontWeight(selected ? .semibold : .regular)
-            }
-            .frame(width: 58, height: 48)
-            .background(selected ? accentColor : Color(.controlBackgroundColor))
-            .foregroundStyle(selected ? .white : .primary)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(selected ? accentColor : Color(.separatorColor), lineWidth: selected ? 0 : 1))
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Download Button
 
     private var downloadButton: some View {
         HStack(spacing: 10) {
-            Button {
-                startDownload()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.down.circle.fill").font(.body)
-                    Text("Baixar").fontWeight(.semibold).font(.title3)
+            Button { startDownload() } label: {
+                HStack(spacing: 10) {
+                    if manager.isDownloading {
+                        ProgressView().controlSize(.small).tint(.white)
+                    } else {
+                        Image(systemName: "arrow.down.circle.fill").font(.title3)
+                    }
+                    Text(manager.isInstalling ? "Instalando..." : manager.isDownloading ? "Baixando..." : "Baixar")
+                        .font(.title3).fontWeight(.bold)
                 }
                 .frame(maxWidth: .infinity)
-                .frame(height: 50)
+                .frame(height: 54)
             }
             .buttonStyle(.borderedProminent)
-            .tint(accentColor)
-            .disabled(url.isEmpty || manager.isDownloading)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .tint(.red)
+            .disabled(url.isEmpty || manager.isDownloading || manager.isInstalling)
+            .clipShape(RoundedRectangle(cornerRadius: 27))
 
-            if manager.isDownloading {
-                Button {
-                    manager.cancel()
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "xmark.circle.fill")
-                        Text("Cancelar")
-                    }
-                    .frame(height: 44)
+            if manager.isDownloading && !manager.isInstalling {
+                Button { manager.cancel() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2).foregroundStyle(.secondary)
                 }
-                .buttonStyle(.bordered)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .buttonStyle(.plain)
+                .help("Cancelar")
             }
         }
     }
@@ -493,26 +531,22 @@ struct SingleDownloadView: View {
                     if manager.isDownloading {
                         ProgressView().controlSize(.mini)
                     } else {
-                        Image(systemName: manager.progress == 100
+                        Image(systemName: manager.progress >= 100
                               ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                            .foregroundStyle(manager.progress == 100 ? .green : .orange)
-                            .font(.caption)
+                            .foregroundStyle(manager.progress >= 100 ? .green : .orange)
                     }
                     Text(manager.statusText).font(.subheadline).fontWeight(.medium)
                 }
                 Spacer()
                 Text("\(Int(manager.progress))%")
                     .font(.title3).fontWeight(.bold).monospacedDigit()
-                    .foregroundStyle(accentColor)
+                    .foregroundStyle(.red)
             }
 
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(accentColor.opacity(0.15))
-                        .frame(height: 6)
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(accentColor)
+                    RoundedRectangle(cornerRadius: 4).fill(Color.red.opacity(0.15)).frame(height: 6)
+                    RoundedRectangle(cornerRadius: 4).fill(Color.red)
                         .frame(width: geo.size.width * manager.progress / 100, height: 6)
                         .animation(.linear(duration: 0.3), value: manager.progress)
                 }
@@ -529,112 +563,105 @@ struct SingleDownloadView: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
-                    }.frame(maxHeight: 120)
+                    }.frame(maxHeight: 100)
                 } label: {
-                    Text("Log de saída").font(.caption).foregroundStyle(.secondary)
+                    Text("Log").font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
-        .padding(14)
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color(.separatorColor), lineWidth: 1))
+        .padding(16)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
-    // MARK: - History Panel
+    // MARK: - History Grid
 
-    private var historyPanel: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header
+    private var historySection: some View {
+        VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("Recentes")
-                    .font(.subheadline).fontWeight(.semibold)
+                    .font(.title2).fontWeight(.bold)
                 Spacer()
-                if !manager.history.isEmpty {
-                    Button { manager.clearHistory() } label: {
-                        Image(systemName: "trash").font(.caption)
-                    }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
-                    .help("Limpar histórico")
-                }
+                Button { manager.clearHistory() } label: {
+                    Image(systemName: "trash").foregroundStyle(.secondary)
+                }.buttonStyle(.plain).help("Limpar histórico")
             }
-            .padding(.horizontal, 14).padding(.vertical, 12)
-            .background(Color(.windowBackgroundColor))
 
-            Divider()
-
-            if manager.history.isEmpty {
-                VStack(spacing: 10) {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 36))
-                        .foregroundStyle(.quaternary)
-                    Text("Nenhum download ainda")
-                        .font(.caption).foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 6) {
-                        ForEach(manager.history) { item in
-                            historyRow(item)
-                        }
-                    }
-                    .padding(10)
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 140, maximum: 175), spacing: 12)],
+                spacing: 12
+            ) {
+                ForEach(manager.history) { item in
+                    historyCard(item)
                 }
             }
         }
-        .background(Color(.windowBackgroundColor))
     }
 
-    private func historyRow(_ item: DownloadHistoryItem) -> some View {
+    private func historyCard(_ item: DownloadHistoryItem) -> some View {
         Button {
             NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: item.outputDir)
         } label: {
-            HStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(item.url.contains("instagram")
-                          ? Color.pink.opacity(0.15) : Color.red.opacity(0.15))
-                    .frame(width: 32, height: 32)
-                    .overlay(
-                        Image(systemName: item.url.contains("instagram")
-                              ? "camera.fill" : "play.rectangle.fill")
-                            .font(.caption)
-                            .foregroundStyle(item.url.contains("instagram") ? .pink : .red)
-                    )
+            VStack(alignment: .leading, spacing: 0) {
+                // Thumbnail
+                Group {
+                    if !item.thumbnailURL.isEmpty, let u = URL(string: item.thumbnailURL) {
+                        AsyncImage(url: u) { phase in
+                            switch phase {
+                            case .success(let img):
+                                img.resizable().aspectRatio(contentMode: .fill)
+                            default:
+                                thumbnailPlaceholder
+                            }
+                        }
+                    } else {
+                        thumbnailPlaceholder
+                    }
+                }
+                .frame(height: 84)
+                .frame(maxWidth: .infinity)
+                .clipped()
+                .clipShape(UnevenRoundedRectangle(
+                    topLeadingRadius: 12, bottomLeadingRadius: 0,
+                    bottomTrailingRadius: 0, topTrailingRadius: 12
+                ))
 
+                // Info
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.title.isEmpty ? "Download" : item.title)
-                        .font(.caption).fontWeight(.medium).lineLimit(3)
+                        .font(.caption).fontWeight(.medium)
+                        .lineLimit(2).multilineTextAlignment(.leading)
                         .foregroundStyle(.primary)
-                    Text(item.category)
-                        .font(.caption2)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(accentColor.opacity(0.1))
-                        .foregroundStyle(accentColor)
-                        .clipShape(Capsule())
+                    HStack {
+                        Text(item.category)
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Spacer()
+                        Button {
+                            manager.history.removeAll { $0.id == item.id }
+                        } label: {
+                            Image(systemName: "trash").font(.caption2).foregroundStyle(.quaternary)
+                        }.buttonStyle(.plain)
+                    }
                 }
-                Spacer(minLength: 0)
-                Image(systemName: "folder").font(.caption2).foregroundStyle(.quaternary)
+                .padding(.horizontal, 10).padding(.vertical, 8)
             }
-            .padding(10)
-            .background(Color(.controlBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
         }
         .buttonStyle(.plain)
     }
 
-    // MARK: - Actions
-
-    private func clearAll() {
-        url = ""
-        videoInfo = nil
-        selectedFormatID = nil
-        inspectError = nil
+    private var thumbnailPlaceholder: some View {
+        Rectangle()
+            .fill(Color(.separatorColor).opacity(0.35))
+            .overlay(Image(systemName: "film").foregroundStyle(.quaternary).font(.title2))
     }
 
+    // MARK: - Actions
+
     private func startDownload() {
-        guard !url.isEmpty, !manager.isDownloading else { return }
+        guard !url.isEmpty, !manager.isDownloading, !manager.isInstalling else { return }
         let browser = detectDefaultBrowser()
         manager.download(
             url: url, quality: quality, format: format,
