@@ -152,16 +152,29 @@ final class DownloadManager: ObservableObject {
         let homeYtdlp = home.appendingPathComponent("bin/yt-dlp").path
         let brewPaths = ["/usr/local/bin/yt-dlp", "/opt/homebrew/bin/yt-dlp"]
 
-        // Só marca como pronto se tiver versão NÃO-bundled (fresca)
         let hasFreshYtdlp = FileManager.default.isExecutableFile(atPath: homeYtdlp)
             || brewPaths.contains { FileManager.default.isExecutableFile(atPath: $0) }
 
         if hasFreshYtdlp {
             dependenciesReady = true
-        } else {
-            // Bundle antigo ou nada → baixar versão nova automaticamente
-            installYtdlp()
+            return
         }
+
+        // Mac novo, nada instalado: o .app já traz yt-dlp e ffmpeg dentro dele.
+        // Copia o yt-dlp do bundle para ~/bin (onde o --update consegue atualizá-lo;
+        // dentro do .app ele seria somente leitura) e fica pronto sem baixar nada.
+        if let bundledBin = VideoInfoService.shared.bundledBinDir(),
+           FileManager.default.isExecutableFile(atPath: bundledBin + "/yt-dlp") {
+            let binDir = home.appendingPathComponent("bin")
+            try? FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+            try? FileManager.default.copyItem(atPath: bundledBin + "/yt-dlp", toPath: homeYtdlp)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: homeYtdlp)
+            dependenciesReady = true
+            return
+        }
+
+        // Sem bundle e sem instalação → baixar da internet
+        installYtdlp()
     }
 
     // MARK: - Single download
@@ -422,10 +435,12 @@ final class DownloadManager: ObservableObject {
             "--no-update"
         ]
 
-        // Check ffmpeg availability — apenas instalações reais (o bundled pode estar quebrado)
+        // Check ffmpeg availability — instalado no sistema ou o build estático dentro do .app
+        let bundledFfmpeg = (VideoInfoService.shared.bundledBinDir() ?? "") + "/ffmpeg"
         let hasFfmpeg = FileManager.default.isExecutableFile(atPath: NSHomeDirectory() + "/bin/ffmpeg") ||
                         FileManager.default.isExecutableFile(atPath: "/usr/local/bin/ffmpeg") ||
-                        FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/ffmpeg")
+                        FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/ffmpeg") ||
+                        FileManager.default.isExecutableFile(atPath: bundledFfmpeg)
 
         if audioOnly {
             args += ["-x", "--audio-format", "mp3"]
