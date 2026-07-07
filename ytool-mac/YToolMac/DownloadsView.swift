@@ -21,6 +21,61 @@ func detectDefaultBrowser() -> String {
     return "safari"
 }
 
+// MARK: - Campo de texto nativo (NSTextField) — garante Cmd+V/Cmd+C/Cmd+X sempre funcionais
+
+struct FocusableTextField: NSViewRepresentable {
+    @Binding var text: String
+    var placeholder: String = ""
+    var onCommit: () -> Void = {}
+    var onFocusChange: (Bool) -> Void = { _ in }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.placeholderString = placeholder
+        field.delegate = context.coordinator
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: 15)
+        field.lineBreakMode = .byTruncatingTail
+        field.cell?.sendsActionOnEndEditing = false
+        // Foca uma única vez quando a janela abre
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            if let window = field.window, window.firstResponder is NSWindow || window.firstResponder == nil {
+                window.makeFirstResponder(field)
+            }
+        }
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        guard !context.coordinator.isSyncing else { return }
+        if field.stringValue != text { field.stringValue = text }
+    }
+
+    class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: FocusableTextField
+        var isSyncing = false
+        init(_ parent: FocusableTextField) { self.parent = parent }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            isSyncing = true
+            parent.text = field.stringValue
+            isSyncing = false
+        }
+        func controlTextDidBeginEditing(_ obj: Notification) { parent.onFocusChange(true) }
+        func controlTextDidEndEditing(_ obj: Notification) { parent.onFocusChange(false) }
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            if selector == #selector(NSResponder.insertNewline(_:)) { parent.onCommit(); return true }
+            return false
+        }
+    }
+}
+
 // MARK: - Design tokens
 
 private enum YT {
@@ -46,7 +101,7 @@ struct SingleDownloadView: View {
     @State private var subtitles = false
     @State private var subLangs = "en,pt"
     @State private var showOptions = true
-    @FocusState private var urlFocused: Bool
+    @State private var urlFocused = false
 
     // Video inspection (preview)
     @State private var videoInfo: VideoInfo?
@@ -60,39 +115,78 @@ struct SingleDownloadView: View {
     ]
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                header
-
-                if !manager.dependenciesReady {
-                    setupBanner
+        GeometryReader { geo in
+            if geo.size.width < 980 {
+                // Janela estreita: uma coluna só, histórico embaixo
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        mainColumn
+                        historyColumn
+                    }
+                    .padding(24)
+                    .frame(maxWidth: 780)
+                    .frame(maxWidth: .infinity)
                 }
+            } else {
+                // Janela larga: as duas colunas formam um container único centralizado,
+                // assim as margens externas ficam simétricas em qualquer largura
+                HStack(alignment: .top, spacing: 28) {
+                    ScrollView(showsIndicators: false) {
+                        mainColumn
+                            .padding(.vertical, 28)
+                    }
+                    .frame(maxWidth: 820)
 
-                downloadCard
-
-                if manager.isDownloading || manager.progress > 0 {
-                    progressCard
+                    ScrollView(showsIndicators: false) {
+                        historyColumn
+                            .padding(.vertical, 28)
+                    }
+                    .frame(width: min(460, max(340, geo.size.width * 0.32)))
                 }
-
-                if let item = manager.lastDownload, !manager.isDownloading {
-                    completionCard(item)
-                }
-
-                if !manager.history.isEmpty {
-                    historySection
-                }
+                .padding(.horizontal, 32)
+                .frame(maxWidth: 1340)
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: 780)
-            .padding(.horizontal, 32)
-            .padding(.vertical, 28)
-            .frame(maxWidth: .infinity)
         }
         .background(backgroundView)
-        .onAppear {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { urlFocused = true }
-        }
         .onChange(of: url) { _, newValue in
             inspectURL(newValue)
+        }
+    }
+
+    // MARK: - Columns
+
+    private var mainColumn: some View {
+        VStack(spacing: 14) {
+            engineStatus
+                .frame(maxWidth: .infinity, alignment: .trailing)
+
+            if !manager.dependenciesReady {
+                setupBanner
+            }
+
+            downloadCard
+
+            // Progresso e conclusão ficam abaixo do card de download
+            if manager.isDownloading || manager.progress > 0 {
+                progressCard
+            }
+
+            if let item = manager.lastDownload, !manager.isDownloading {
+                completionCard(item)
+            }
+        }
+    }
+
+    private var historyColumn: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            historyHeader
+
+            if !manager.history.isEmpty {
+                historyGrid
+            } else {
+                emptyHistoryState
+            }
         }
     }
 
@@ -185,127 +279,79 @@ struct SingleDownloadView: View {
     // MARK: - Preview Card
 
     private func previewCard(_ info: VideoInfo) -> some View {
-        HStack(alignment: .top, spacing: 16) {
-            // Thumbnail with duration badge — click opens the video in the browser
+        VStack(alignment: .leading, spacing: 8) {
+            // Thumbnail grande em 16:9 ocupando a largura do card — clique abre no navegador
             Button {
                 if let u = URL(string: url.trimmingCharacters(in: .whitespacesAndNewlines)) {
                     NSWorkspace.shared.open(u)
                 }
             } label: {
-                ZStack(alignment: .bottomTrailing) {
-                    thumbnail(for: info.thumbnail, fallbackIcon: "film", fallbackColor: .secondary)
-                        .frame(width: 210, height: 118)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 1))
-                        .overlay(
-                            Image(systemName: "play.circle.fill")
-                                .font(.system(size: 32))
-                                .foregroundStyle(.white.opacity(0.85))
-                                .shadow(radius: 4)
-                        )
-
-                    if !info.durationFormatted.isEmpty {
-                        Text(info.durationFormatted)
-                            .font(.system(size: 10, weight: .semibold))
-                            .monospacedDigit()
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 6).padding(.vertical, 3)
-                            .background(Color.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 5))
-                            .padding(6)
+                Color.clear
+                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                    .overlay(thumbnail(for: info.thumbnail, fallbackIcon: "film", fallbackColor: .secondary))
+                    .overlay(
+                        Circle()
+                            .fill(.black.opacity(0.35))
+                            .frame(width: 64, height: 64)
+                            .overlay(
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 24, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .offset(x: 2)
+                            )
+                    )
+                    .overlay(alignment: .bottomTrailing) {
+                        if !info.durationFormatted.isEmpty {
+                            Text(info.durationFormatted)
+                                .font(.system(size: 12, weight: .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(Color.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 6))
+                                .padding(10)
+                        }
                     }
-                }
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .overlay(RoundedRectangle(cornerRadius: 14)
+                        .strokeBorder(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 1))
             }
             .buttonStyle(.plain)
             .help("Assistir no navegador")
 
-            VStack(alignment: .leading, spacing: 8) {
+            // Linha compacta: título + indicador de legendas
+            HStack(spacing: 8) {
                 Text(info.title.isEmpty ? "Vídeo" : info.title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .lineLimit(2)
-
-                if !info.uploader.isEmpty {
-                    Label(info.uploader, systemImage: "person.crop.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if !availableHeights.isEmpty {
-                    HStack(spacing: 6) {
-                        Text("DISPONÍVEL EM")
-                            .font(.system(size: 9, weight: .semibold))
-                            .tracking(0.5)
-                            .foregroundStyle(.tertiary)
-                        ForEach(availableHeights.prefix(5), id: \.self) { h in
-                            Text(resLabel(h))
-                                .font(.system(size: 10, weight: h == maxHeight ? .bold : .medium))
-                                .foregroundStyle(h == maxHeight ? .white : .secondary)
-                                .padding(.horizontal, 7).padding(.vertical, 3)
-                                .background(Capsule().fill(h == maxHeight ? YT.red : Color.primary.opacity(0.06)))
-                        }
-                    }
-                }
-
-                if maxHeight > 0 {
-                    Label("Melhor qualidade deste vídeo: \(resLabel(maxHeight))", systemImage: "sparkles")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if info.subtitleLangs.isEmpty {
-                    Label("Sem legendas do canal", systemImage: "captions.bubble")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                } else {
-                    Label("Legendas: \(info.subtitleLangs.prefix(5).joined(separator: ", "))\(info.subtitleLangs.count > 5 ? "…" : "")",
-                          systemImage: "captions.bubble.fill")
-                        .font(.caption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer()
+                if !info.subtitleLangs.isEmpty {
+                    Label(info.subtitleLangs.prefix(3).joined(separator: ", "), systemImage: "captions.bubble.fill")
+                        .font(.caption2)
                         .foregroundStyle(YT.red)
                         .help("Este vídeo tem legendas — a opção Legendas foi marcada automaticamente")
                 }
             }
-
-            Spacer(minLength: 0)
+            .padding(.horizontal, 2)
         }
-        .padding(14)
-        .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 13))
-        .overlay(RoundedRectangle(cornerRadius: 13)
-            .strokeBorder(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 1))
         .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
     private var backgroundView: some View {
         ZStack(alignment: .top) {
             Color(nsColor: .windowBackgroundColor)
-            LinearGradient(colors: [YT.red.opacity(0.07), .clear],
+            LinearGradient(colors: [YT.red.opacity(0.04), .clear],
                            startPoint: .top, endPoint: .bottom)
-                .frame(height: 300)
+                .frame(height: 220)
                 .frame(maxHeight: .infinity, alignment: .top)
         }
         .ignoresSafeArea()
     }
 
-    // MARK: - Header
+    // MARK: - Engine status (versão do yt-dlp)
 
-    private var header: some View {
-        HStack(spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(YT.gradient)
-                    .frame(width: 46, height: 46)
-                    .shadow(color: YT.red.opacity(0.35), radius: 8, y: 3)
-                Image(systemName: "arrow.down.to.line")
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(.white)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text("YTool")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                Text("Baixe vídeos do YouTube e Instagram")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
+    private var engineStatus: some View {
+        HStack(spacing: 12) {
             if manager.isUpdatingYtdlp {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)
@@ -325,7 +371,60 @@ struct SingleDownloadView: View {
                     .help("yt-dlp \(ver) — o motor que baixa os vídeos. Ele se atualiza automaticamente sempre que você abre o app.")
             }
         }
-        .padding(.bottom, 4)
+    }
+
+    // MARK: - History Header & Grid
+
+    private var historyHeader: some View {
+        HStack {
+            Text("Recentes")
+                .font(.title2).fontWeight(.bold)
+            Spacer()
+            if !manager.history.isEmpty {
+                Button {
+                    manager.clearHistory()
+                } label: {
+                    Text("Limpar")
+                        .font(.subheadline)
+                        .foregroundStyle(YT.red)
+                }
+                .buttonStyle(.plain)
+                .help("Limpar histórico")
+            }
+        }
+    }
+
+    private var historyGrid: some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 150, maximum: 240), spacing: 14)],
+            spacing: 14
+        ) {
+            ForEach(manager.history) { item in
+                historyCard(item)
+            }
+        }
+    }
+
+    private var emptyHistoryState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "tray")
+                .font(.system(size: 48))
+                .foregroundStyle(.tertiary)
+            Text("Nenhum download ainda")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 60)
+    }
+
+    // MARK: - Date Formatter (PT-BR)
+
+    private func formatDate(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = Locale(identifier: "pt_BR")
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 
     // MARK: - Download Card
@@ -419,11 +518,12 @@ struct SingleDownloadView: View {
                 .font(.system(size: 14))
                 .foregroundStyle(urlFocused ? YT.red : .secondary)
 
-            TextField("Cole o link do vídeo aqui…", text: $url)
-                .textFieldStyle(.plain)
-                .font(.system(size: 15))
-                .focused($urlFocused)
-                .onSubmit(startDownload)
+            FocusableTextField(
+                text: $url,
+                placeholder: "Cole o link do vídeo aqui…",
+                onCommit: startDownload,
+                onFocusChange: { urlFocused = $0 }
+            )
 
             if isInspecting {
                 HStack(spacing: 6) {
@@ -827,76 +927,64 @@ struct SingleDownloadView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
-    // MARK: - History
-
-    private var historySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Recentes")
-                    .font(.title3).fontWeight(.bold)
-                Spacer()
-                Button {
-                    manager.clearHistory()
-                } label: {
-                    Label("Limpar", systemImage: "trash")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Limpar histórico")
-            }
-            .padding(.top, 8)
-
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 150, maximum: 190), spacing: 12)],
-                spacing: 12
-            ) {
-                ForEach(manager.history) { item in
-                    historyCard(item)
-                }
-            }
-        }
-    }
+    // MARK: - History Card
 
     private func historyCard(_ item: DownloadHistoryItem) -> some View {
         Button {
             NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: item.outputDir)
         } label: {
             VStack(alignment: .leading, spacing: 0) {
-                thumbnail(for: item.thumbnailURL, fallbackIcon: "film", fallbackColor: .secondary)
-                    .frame(height: 88)
-                    .frame(maxWidth: .infinity)
-                    .clipped()
+                // Thumbnail
+                ZStack(alignment: .bottomLeading) {
+                    thumbnail(for: item.thumbnailURL, fallbackIcon: "film", fallbackColor: .secondary)
+                        .frame(height: 120)
+                        .frame(maxWidth: .infinity)
+                        .clipped()
+                    
+                    // Data overlay
+                    Text(formatDate(item.timestamp))
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
+                        .padding(8)
+                }
 
-                VStack(alignment: .leading, spacing: 4) {
+                // Info section
+                VStack(alignment: .leading, spacing: 6) {
                     Text(item.title.isEmpty ? "Download" : item.title)
-                        .font(.caption).fontWeight(.medium)
-                        .lineLimit(2).multilineTextAlignment(.leading)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
                         .foregroundStyle(.primary)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    HStack {
+                    
+                    HStack(spacing: 6) {
                         Text(item.category)
-                            .font(.system(size: 10))
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                         Spacer()
                         Button {
-                            manager.history.removeAll { $0.id == item.id }
+                            withAnimation {
+                                manager.history.removeAll { $0.id == item.id }
+                            }
                         } label: {
                             Image(systemName: "trash")
-                                .font(.system(size: 10))
+                                .font(.system(size: 11))
                                 .foregroundStyle(.quaternary)
                         }
                         .buttonStyle(.plain)
                     }
                 }
-                .padding(.horizontal, 10).padding(.vertical, 8)
+                .padding(12)
             }
             .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 1))
+                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.3), lineWidth: 1))
         }
         .buttonStyle(.plain)
+        .help("Clique para abrir no Finder")
     }
 
     // MARK: - Shared thumbnail helper
