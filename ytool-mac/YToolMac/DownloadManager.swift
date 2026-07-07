@@ -373,6 +373,10 @@ final class DownloadManager: ObservableObject {
             "--newline",
             "--no-playlist",
             "--remote-components", "ejs:github",
+            // --print implica --simulate e --quiet; sem estes dois flags abaixo
+            // o yt-dlp imprime o título e sai SEM baixar nada
+            "--no-simulate",
+            "--progress",
             "--print", "YTOOL_TITLE:%(title)s",
             "--print", "YTOOL_THUMB:%(thumbnail)s",
             "-o", outputTemplate,
@@ -383,12 +387,10 @@ final class DownloadManager: ObservableObject {
             "--no-update"
         ]
 
-        // Check ffmpeg availability (bundled or system)
-        let bundledBin = VideoInfoService.shared.bundledBinDir() ?? ""
-        let hasFfmpeg = FileManager.default.fileExists(atPath: bundledBin + "/ffmpeg") ||
-                        FileManager.default.fileExists(atPath: NSHomeDirectory() + "/bin/ffmpeg") ||
-                        FileManager.default.fileExists(atPath: "/usr/local/bin/ffmpeg") ||
-                        FileManager.default.fileExists(atPath: "/opt/homebrew/bin/ffmpeg")
+        // Check ffmpeg availability — apenas instalações reais (o bundled pode estar quebrado)
+        let hasFfmpeg = FileManager.default.isExecutableFile(atPath: NSHomeDirectory() + "/bin/ffmpeg") ||
+                        FileManager.default.isExecutableFile(atPath: "/usr/local/bin/ffmpeg") ||
+                        FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/ffmpeg")
 
         if audioOnly {
             args += ["-x", "--audio-format", "mp3"]
@@ -417,24 +419,56 @@ final class DownloadManager: ObservableObject {
                      "--ignore-errors"]
         }
 
+        var env = ProcessInfo.processInfo.environment
+        let bundledBin = VideoInfoService.shared.bundledBinDir() ?? ""
+        let extraPaths = [NSHomeDirectory() + "/bin", "/usr/local/bin", "/opt/homebrew/bin", bundledBin]
+            .filter { !$0.isEmpty }
+            .joined(separator: ":")
+        env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin")
+
+        let argsWithoutCookies = args + [url]
         if let browser = cookieBrowser, !browser.isEmpty {
             args += ["--cookies-from-browser", browser]
             appendLog("Usando cookies do \(browser)")
         }
-
         args.append(url)
         appendLog("Comando: yt-dlp \(args.joined(separator: " "))")
         statusText = "Baixando..."
 
+        var exitCode = await runYtdlpProcess(ytdlp, args: args, env: env)
+
+        // Ler cookies do navegador pode falhar dentro do .app (permissões do macOS).
+        // Se o download com cookies falhou, tenta uma vez sem cookies.
+        if exitCode != 0, statusText != "Cancelado", args != argsWithoutCookies {
+            appendLog("⚠️ Falha com cookies do navegador — tentando sem cookies...")
+            statusText = "Tentando sem cookies..."
+            progress = 0
+            exitCode = await runYtdlpProcess(ytdlp, args: argsWithoutCookies, env: env)
+        }
+
+        if exitCode == 0 {
+            progress = 100
+            statusText = "✅ Concluído!"
+            let title = parsedTitle.isEmpty ? (videoInfo?.title ?? "") : parsedTitle
+            let thumb = parsedThumbnail.isEmpty ? (videoInfo?.thumbnail ?? "") : parsedThumbnail
+            let item = DownloadHistoryItem(
+                url: url, title: title,
+                outputDir: outputDir.path, category: category,
+                thumbnailURL: thumb
+            )
+            lastDownload = item
+            history.insert(item, at: 0)
+            if history.count > 100 { history = Array(history.prefix(100)) }
+            saveHistory()
+        } else if statusText != "Cancelado" {
+            statusText = "❌ Erro (código \(exitCode))"
+        }
+    }
+
+    private func runYtdlpProcess(_ ytdlp: String, args: [String], env: [String: String]) async -> Int32 {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: ytdlp)
         proc.arguments = args
-
-        var env = ProcessInfo.processInfo.environment
-        let extraPaths = [bundledBin, NSHomeDirectory() + "/bin", "/usr/local/bin", "/opt/homebrew/bin"]
-            .filter { !$0.isEmpty }
-            .joined(separator: ":")
-        env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin")
         proc.environment = env
 
         let pipe = Pipe()
@@ -447,7 +481,7 @@ final class DownloadManager: ObservableObject {
         } catch {
             statusText = "❌ Erro ao executar yt-dlp"
             appendLog(error.localizedDescription)
-            return
+            return -1
         }
 
         let fileHandle = pipe.fileHandleForReading
@@ -476,24 +510,7 @@ final class DownloadManager: ObservableObject {
             }
         }
 
-        let exitCode = proc.terminationStatus
-        if exitCode == 0 {
-            progress = 100
-            statusText = "✅ Concluído!"
-            let title = parsedTitle.isEmpty ? (videoInfo?.title ?? "") : parsedTitle
-            let thumb = parsedThumbnail.isEmpty ? (videoInfo?.thumbnail ?? "") : parsedThumbnail
-            let item = DownloadHistoryItem(
-                url: url, title: title,
-                outputDir: outputDir.path, category: category,
-                thumbnailURL: thumb
-            )
-            lastDownload = item
-            history.insert(item, at: 0)
-            if history.count > 100 { history = Array(history.prefix(100)) }
-            saveHistory()
-        } else if statusText != "Cancelado" {
-            statusText = "❌ Erro (código \(exitCode))"
-        }
+        return proc.terminationStatus
     }
 
     // MARK: - Helpers

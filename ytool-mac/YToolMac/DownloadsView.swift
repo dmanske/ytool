@@ -1,62 +1,6 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Reliable NSTextField wrapper
-
-struct FocusableTextField: NSViewRepresentable {
-    @Binding var text: String
-    var placeholder: String = ""
-    var onCommit: () -> Void = {}
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    func makeNSView(context: Context) -> NSTextField {
-        let field = NSTextField()
-        field.placeholderString = placeholder
-        field.delegate = context.coordinator
-        field.bezelStyle = .roundedBezel
-        field.focusRingType = .none
-        field.isEditable = true
-        field.isSelectable = true
-        field.isBezeled = false
-        field.drawsBackground = false
-        field.allowsEditingTextAttributes = false
-        field.font = .systemFont(ofSize: 16)
-        field.lineBreakMode = .byTruncatingTail
-        field.cell?.sendsActionOnEndEditing = false
-        context.coordinator.field = field
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            if let window = field.window, window.firstResponder != field.currentEditor() {
-                window.makeFirstResponder(field)
-            }
-        }
-        return field
-    }
-
-    func updateNSView(_ field: NSTextField, context: Context) {
-        guard !context.coordinator.isSyncing else { return }
-        if field.stringValue != text { field.stringValue = text }
-    }
-
-    class Coordinator: NSObject, NSTextFieldDelegate {
-        var parent: FocusableTextField
-        var isSyncing = false
-        weak var field: NSTextField?
-        init(_ parent: FocusableTextField) { self.parent = parent }
-
-        func controlTextDidChange(_ obj: Notification) {
-            guard let field = obj.object as? NSTextField else { return }
-            isSyncing = true
-            parent.text = field.stringValue
-            isSyncing = false
-        }
-        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-            if selector == #selector(NSResponder.insertNewline(_:)) { parent.onCommit(); return true }
-            return false
-        }
-    }
-}
-
 // MARK: - Browser Detection
 
 func detectDefaultBrowser() -> String {
@@ -77,6 +21,17 @@ func detectDefaultBrowser() -> String {
     return "safari"
 }
 
+// MARK: - Design tokens
+
+private enum YT {
+    static let red = Color(red: 0.92, green: 0.20, blue: 0.18)
+    static let redDark = Color(red: 0.72, green: 0.08, blue: 0.12)
+    static var gradient: LinearGradient {
+        LinearGradient(colors: [red, redDark], startPoint: .top, endPoint: .bottom)
+    }
+    static let cardRadius: CGFloat = 16
+}
+
 // MARK: - Main Download View
 
 struct SingleDownloadView: View {
@@ -91,6 +46,7 @@ struct SingleDownloadView: View {
     @State private var subtitles = false
     @State private var subLangs = "en,pt"
     @State private var showOptions = false
+    @FocusState private var urlFocused: Bool
 
     private let categories = [
         "Clips", "Música", "Tutoriais", "Filmes", "Séries",
@@ -98,66 +54,368 @@ struct SingleDownloadView: View {
     ]
 
     var body: some View {
+        ScrollView {
+            VStack(spacing: 20) {
+                header
+
+                if !manager.dependenciesReady {
+                    setupBanner
+                }
+
+                downloadCard
+
+                if manager.isDownloading || manager.progress > 0 {
+                    progressCard
+                }
+
+                if let item = manager.lastDownload, !manager.isDownloading {
+                    completionCard(item)
+                }
+
+                if !manager.history.isEmpty {
+                    historySection
+                }
+            }
+            .frame(maxWidth: 780)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 28)
+            .frame(maxWidth: .infinity)
+        }
+        .background(backgroundView)
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { urlFocused = true }
+        }
+    }
+
+    private var backgroundView: some View {
         ZStack(alignment: .top) {
-            gradientBackground
-            ScrollView {
-                VStack(spacing: 28) {
-                    Spacer().frame(height: 36)
+            Color(nsColor: .windowBackgroundColor)
+            LinearGradient(colors: [YT.red.opacity(0.07), .clear],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(height: 300)
+                .frame(maxHeight: .infinity, alignment: .top)
+        }
+        .ignoresSafeArea()
+    }
 
-                    // Setup banner (when dependencies are missing/installing)
-                    if !manager.dependenciesReady {
-                        setupBanner.padding(.horizontal, 28)
-                    }
+    // MARK: - Header
 
-                    controlsCard
-                    if manager.isDownloading || manager.progress > 0 {
-                        progressCard.padding(.horizontal, 28)
+    private var header: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(YT.gradient)
+                    .frame(width: 46, height: 46)
+                    .shadow(color: YT.red.opacity(0.35), radius: 8, y: 3)
+                Image(systemName: "arrow.down.to.line")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("YTool")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                Text("Baixe vídeos do YouTube e Instagram")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if let ver = manager.ytdlpVersion, !ver.isEmpty {
+                Label("yt-dlp \(ver)", systemImage: "checkmark.seal.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Capsule().fill(Color.primary.opacity(0.05)))
+            }
+        }
+        .padding(.bottom, 4)
+    }
+
+    // MARK: - Download Card
+
+    private var downloadCard: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            urlField
+
+            VStack(alignment: .leading, spacing: 12) {
+                optionRow(label: "Qualidade") {
+                    ForEach([("Melhor", "best"), ("4K", "2160p"), ("1080p", "1080p"),
+                             ("720p", "720p"), ("480p", "480p")], id: \.1) { label, val in
+                        pill(label, selected: quality == val && !audioOnly) {
+                            quality = val
+                            audioOnly = false
+                        }
                     }
-                    if let item = manager.lastDownload, !manager.isDownloading {
-                        completionCard(item).padding(.horizontal, 28)
+                }
+                optionRow(label: "Formato") {
+                    pill("MP4",  selected: !audioOnly && format == "mp4")  { audioOnly = false; format = "mp4" }
+                    pill("WebM", selected: !audioOnly && format == "webm") { audioOnly = false; format = "webm" }
+                    pill("MKV",  selected: !audioOnly && format == "mkv")  { audioOnly = false; format = "mkv" }
+                    pill("MP3",  selected: audioOnly, icon: "music.note")  { audioOnly = true;  format = "mp3" }
+
+                    Spacer()
+
+                    Button {
+                        withAnimation(.spring(response: 0.3)) { showOptions.toggle() }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "slider.horizontal.3")
+                            Text("Opções")
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 8, weight: .bold))
+                                .rotationEffect(.degrees(showOptions ? 180 : 0))
+                        }
+                        .font(.caption)
+                        .foregroundStyle(showOptions ? YT.red : .secondary)
                     }
-                    if !manager.history.isEmpty {
-                        historySection.padding(.horizontal, 28)
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if showOptions {
+                extraOptions
+            }
+
+            downloadButton
+        }
+        .padding(22)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: YT.cardRadius))
+        .overlay(RoundedRectangle(cornerRadius: YT.cardRadius)
+            .strokeBorder(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 1))
+    }
+
+    // MARK: - URL Field
+
+    private var urlField: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "link")
+                .font(.system(size: 14))
+                .foregroundStyle(urlFocused ? YT.red : .secondary)
+
+            TextField("Cole o link do vídeo aqui…", text: $url)
+                .textFieldStyle(.plain)
+                .font(.system(size: 15))
+                .focused($urlFocused)
+                .onSubmit(startDownload)
+
+            if !url.isEmpty {
+                Button { url = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Limpar")
+            }
+
+            Divider().frame(height: 16)
+
+            Button {
+                if let s = NSPasteboard.general.string(forType: .string)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+                    url = s
+                }
+            } label: {
+                Label("Colar", systemImage: "doc.on.clipboard")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundStyle(YT.red)
+            }
+            .buttonStyle(.plain)
+            .help("Colar da área de transferência")
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 46)
+        .background(RoundedRectangle(cornerRadius: 11).fill(Color(nsColor: .textBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 11)
+            .strokeBorder(urlFocused ? YT.red.opacity(0.55) : Color(nsColor: .separatorColor).opacity(0.7),
+                          lineWidth: urlFocused ? 1.5 : 1))
+        .animation(.easeInOut(duration: 0.15), value: urlFocused)
+    }
+
+    // MARK: - Option rows + pills
+
+    private func optionRow<Content: View>(label: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 6) {
+            Text(label.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.6)
+                .foregroundStyle(.secondary)
+                .frame(width: 74, alignment: .leading)
+            content()
+        }
+    }
+
+    private func pill(_ label: String, selected: Bool, icon: String? = nil, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if let icon { Image(systemName: icon).font(.system(size: 10)) }
+                Text(label)
+            }
+            .font(.system(size: 12, weight: selected ? .semibold : .regular))
+            .padding(.horizontal, 13).padding(.vertical, 6)
+            .background(Capsule().fill(selected ? YT.red : Color.primary.opacity(0.055)))
+            .foregroundStyle(selected ? .white : .primary)
+            .animation(.easeInOut(duration: 0.15), value: selected)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Extra Options
+
+    private var extraOptions: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Divider()
+            HStack(alignment: .top, spacing: 24) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Categoria", systemImage: "folder")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Picker("", selection: $category) {
+                        ForEach(categories, id: \.self) { Text($0) }
                     }
-                    Spacer().frame(height: 32)
+                    .pickerStyle(.menu).labelsHidden()
+                    .frame(width: 130)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Nome do arquivo", systemImage: "pencil")
+                        .font(.caption).foregroundStyle(.secondary)
+                    TextField("Título do vídeo (padrão)", text: $customFilename)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 220)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Legendas", systemImage: "captions.bubble")
+                        .font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        Toggle("", isOn: $subtitles)
+                            .toggleStyle(.switch).controlSize(.small)
+                            .tint(YT.red).labelsHidden()
+                        if subtitles {
+                            TextField("en,pt", text: $subLangs)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 80).font(.caption)
+                        }
+                    }
+                }
+                Spacer()
+            }
+        }
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    // MARK: - Download Button
+
+    private var downloadButton: some View {
+        HStack(spacing: 10) {
+            Button(action: startDownload) {
+                HStack(spacing: 8) {
+                    if manager.isDownloading {
+                        ProgressView().controlSize(.small).tint(.white)
+                    } else {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    Text(manager.isInstalling ? "Instalando…" : manager.isDownloading ? "Baixando…" : "Baixar")
+                        .font(.system(size: 15, weight: .semibold))
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 46)
+                .background(
+                    RoundedRectangle(cornerRadius: 11)
+                        .fill(isDisabled ? AnyShapeStyle(Color.gray.opacity(0.45)) : AnyShapeStyle(YT.gradient))
+                )
+                .shadow(color: isDisabled ? .clear : YT.red.opacity(0.3), radius: 10, y: 4)
+            }
+            .buttonStyle(.plain)
+            .disabled(isDisabled)
+
+            if manager.isDownloading && !manager.isInstalling {
+                Button { manager.cancel() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 24))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Cancelar")
+            }
+        }
+    }
+
+    private var isDisabled: Bool {
+        url.isEmpty || manager.isDownloading || manager.isInstalling
+    }
+
+    // MARK: - Progress Card
+
+    private var progressCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                HStack(spacing: 8) {
+                    if manager.isDownloading {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: manager.progress >= 100
+                              ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                            .foregroundStyle(manager.progress >= 100 ? .green : .orange)
+                    }
+                    Text(manager.statusText)
+                        .font(.subheadline).fontWeight(.medium)
+                }
+                Spacer()
+                Text("\(Int(manager.progress))%")
+                    .font(.system(size: 18, weight: .bold))
+                    .monospacedDigit()
+                    .foregroundStyle(YT.red)
+            }
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(YT.red.opacity(0.12)).frame(height: 6)
+                    Capsule().fill(YT.gradient)
+                        .frame(width: max(6, geo.size.width * manager.progress / 100), height: 6)
+                        .animation(.linear(duration: 0.3), value: manager.progress)
+                }
+            }
+            .frame(height: 6)
+
+            if !manager.logLines.isEmpty {
+                DisclosureGroup {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(manager.logLines.suffix(12), id: \.self) { line in
+                                Text(line)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 100)
+                } label: {
+                    Text("Detalhes").font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(18)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: YT.cardRadius))
+        .overlay(RoundedRectangle(cornerRadius: YT.cardRadius)
+            .strokeBorder(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 1))
     }
 
-    // MARK: - Completion Preview Card
+    // MARK: - Completion Card
 
     private func completionCard(_ item: DownloadHistoryItem) -> some View {
-        HStack(spacing: 16) {
-            // Thumbnail
-            Group {
-                if !item.thumbnailURL.isEmpty, let u = URL(string: item.thumbnailURL) {
-                    AsyncImage(url: u) { phase in
-                        if case .success(let img) = phase {
-                            img.resizable().aspectRatio(contentMode: .fill)
-                        } else {
-                            Rectangle().fill(Color.green.opacity(0.15))
-                                .overlay(Image(systemName: "checkmark.circle.fill")
-                                    .font(.title).foregroundStyle(.green))
-                        }
-                    }
-                } else {
-                    Rectangle().fill(Color.green.opacity(0.15))
-                        .overlay(Image(systemName: "checkmark.circle.fill")
-                            .font(.title).foregroundStyle(.green))
-                }
-            }
-            .frame(width: 120, height: 68)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+        HStack(spacing: 14) {
+            thumbnail(for: item.thumbnailURL, fallbackIcon: "checkmark.circle.fill", fallbackColor: .green)
+                .frame(width: 112, height: 63)
+                .clipShape(RoundedRectangle(cornerRadius: 9))
 
-            VStack(alignment: .leading, spacing: 6) {
-                Label("Download concluído!", systemImage: "checkmark.circle.fill")
+            VStack(alignment: .leading, spacing: 5) {
+                Label("Download concluído", systemImage: "checkmark.circle.fill")
                     .font(.subheadline).fontWeight(.semibold)
                     .foregroundStyle(.green)
                 Text(item.title.isEmpty ? "Arquivo salvo" : item.title)
                     .font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     Button {
                         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: item.outputDir)
                     } label: {
@@ -165,11 +423,11 @@ struct SingleDownloadView: View {
                             .font(.caption).fontWeight(.medium)
                     }
                     .buttonStyle(.bordered)
-                    .clipShape(Capsule())
+                    .controlSize(.small)
 
                     Button {
                         if let files = try? FileManager.default.contentsOfDirectory(atPath: item.outputDir),
-                           let file = files.first {
+                           let file = files.first(where: { !$0.hasPrefix(".") }) {
                             let full = (item.outputDir as NSString).appendingPathComponent(file)
                             NSWorkspace.shared.open(URL(fileURLWithPath: full))
                         }
@@ -179,23 +437,24 @@ struct SingleDownloadView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.green)
-                    .clipShape(Capsule())
+                    .controlSize(.small)
                 }
             }
 
             Spacer()
 
             Button { manager.lastDownload = nil } label: {
-                Image(systemName: "xmark").font(.caption).foregroundStyle(.tertiary)
-            }.buttonStyle(.plain)
+                Image(systemName: "xmark")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
         }
         .padding(14)
-        .background(Color.green.opacity(0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16)
+        .background(Color.green.opacity(0.06), in: RoundedRectangle(cornerRadius: YT.cardRadius))
+        .overlay(RoundedRectangle(cornerRadius: YT.cardRadius)
             .strokeBorder(Color.green.opacity(0.25), lineWidth: 1))
         .transition(.move(edge: .top).combined(with: .opacity))
-        .animation(.spring(response: 0.4), value: manager.lastDownload != nil)
     }
 
     // MARK: - Setup Banner
@@ -213,7 +472,7 @@ struct SingleDownloadView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(manager.isInstalling
-                         ? "Instalando dependências..."
+                         ? "Instalando dependências…"
                          : "Dependências não encontradas")
                         .font(.subheadline).fontWeight(.semibold)
                     Text(manager.isInstalling
@@ -239,32 +498,32 @@ struct SingleDownloadView: View {
             if manager.isInstalling && manager.progress > 0 {
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 3).fill(Color.blue.opacity(0.2)).frame(height: 5)
-                        RoundedRectangle(cornerRadius: 3).fill(Color.blue)
+                        Capsule().fill(Color.blue.opacity(0.2)).frame(height: 5)
+                        Capsule().fill(Color.blue)
                             .frame(width: geo.size.width * manager.progress / 100, height: 5)
                             .animation(.linear(duration: 0.3), value: manager.progress)
                     }
-                }.frame(height: 5)
+                }
+                .frame(height: 5)
             }
 
-            // Version status
             if let ver = manager.ytdlpVersion {
                 HStack(spacing: 6) {
                     Image(systemName: ver.isEmpty ? "xmark.circle.fill" : "checkmark.circle.fill")
-                        .foregroundStyle(ver.isEmpty ? .red : .green)
+                        .foregroundStyle(ver.isEmpty ? Color.red : Color.green)
                         .font(.caption)
-                    Text(ver.isEmpty
-                         ? "yt-dlp: não encontrado"
-                         : "yt-dlp \(ver) ✓")
-                        .font(.caption).foregroundStyle(ver.isEmpty ? .red : .green)
+                    Text(ver.isEmpty ? "yt-dlp: não encontrado" : "yt-dlp \(ver)")
+                        .font(.caption)
+                        .foregroundStyle(ver.isEmpty ? Color.red : Color.green)
                     Spacer()
                     Button { manager.checkYtdlpVersion() } label: {
                         Image(systemName: "arrow.clockwise").font(.caption2)
-                    }.buttonStyle(.plain).foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
                 }
             }
 
-            // Terminal fallback
             DisclosureGroup(isExpanded: $showTerminalTip) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Ou instale manualmente pelo Terminal:")
@@ -281,9 +540,8 @@ struct SingleDownloadView: View {
             }
         }
         .padding(16)
-        .background(Color.orange.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16)
+        .background(Color.orange.opacity(0.07), in: RoundedRectangle(cornerRadius: YT.cardRadius))
+        .overlay(RoundedRectangle(cornerRadius: YT.cardRadius)
             .strokeBorder(Color.orange.opacity(0.25), lineWidth: 1))
     }
 
@@ -305,290 +563,32 @@ struct SingleDownloadView: View {
             .help("Copiar")
         }
         .padding(10)
-        .background(Color(.textBackgroundColor).opacity(0.8))
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.8))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
-    // MARK: - Gradient Background
-
-    private var gradientBackground: some View {
-        ZStack {
-            Color(.windowBackgroundColor)
-            Circle()
-                .fill(Color.red.opacity(0.30))
-                .frame(width: 550)
-                .blur(radius: 100)
-                .offset(x: -200, y: -170)
-            Circle()
-                .fill(Color.blue.opacity(0.16))
-                .frame(width: 460)
-                .blur(radius: 100)
-                .offset(x: 300, y: -140)
-            Circle()
-                .fill(Color.pink.opacity(0.18))
-                .frame(width: 380)
-                .blur(radius: 80)
-                .offset(x: 80, y: 60)
-        }
-        .ignoresSafeArea()
-    }
-
-    // MARK: - Controls Card
-
-    private var controlsCard: some View {
-        VStack(spacing: 20) {
-            urlBar
-            qualityFormatRow
-            downloadButton
-            if showOptions { optionsExtra }
-        }
-        .padding(.horizontal, 26).padding(.vertical, 22)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 24))
-        .shadow(color: .black.opacity(0.12), radius: 24, y: 4)
-        .padding(.horizontal, 28)
-    }
-
-    // MARK: - URL Bar
-
-    private var urlBar: some View {
-        HStack(spacing: 0) {
-            Image(systemName: "link")
-                .foregroundStyle(.tertiary)
-                .frame(width: 44)
-                .font(.system(size: 16))
-
-            FocusableTextField(
-                text: $url,
-                placeholder: "Cole o link aqui...",
-                onCommit: startDownload
-            )
-
-            if !url.isEmpty {
-                Button { url = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.tertiary)
-                        .padding(.trailing, 6)
-                }.buttonStyle(.plain)
-            }
-
-            Button {
-                if let s = NSPasteboard.general.string(forType: .string)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
-                    url = s
-                }
-            } label: {
-                Image(systemName: "doc.on.clipboard")
-                    .foregroundStyle(.red)
-                    .font(.system(size: 17))
-                    .padding(.trailing, 16)
-            }
-            .buttonStyle(.plain)
-            .help("Colar da área de transferência")
-        }
-        .frame(height: 56)
-        .background(Color(.textBackgroundColor).opacity(0.65))
-        .clipShape(RoundedRectangle(cornerRadius: 28))
-        .overlay(RoundedRectangle(cornerRadius: 28)
-            .strokeBorder(Color(.separatorColor).opacity(0.5), lineWidth: 1))
-    }
-
-    // MARK: - Quality + Format Pills
-
-    private var qualityFormatRow: some View {
-        HStack(spacing: 0) {
-            // Quality label
-            Text("QUALIDADE")
-                .font(.caption2).fontWeight(.semibold)
-                .foregroundStyle(.secondary).tracking(0.5)
-                .padding(.trailing, 8)
-
-            // Quality pills
-            HStack(spacing: 6) {
-                ForEach([("Melhor","best"),("4K","2160p"),("1080p","1080p"),("720p","720p"),("480p","480p")], id: \.1) { label, val in
-                    pill(label, selected: quality == val && !audioOnly) {
-                        quality = val; audioOnly = false
-                    }
-                }
-            }
-
-            Divider().frame(height: 24).padding(.horizontal, 14)
-
-            // Format label
-            Text("FORMATO")
-                .font(.caption2).fontWeight(.semibold)
-                .foregroundStyle(.secondary).tracking(0.5)
-                .padding(.trailing, 8)
-
-            // Format pills
-            HStack(spacing: 6) {
-                pill("MP4",  selected: !audioOnly && format == "mp4")  { audioOnly = false; format = "mp4" }
-                pill("WebM", selected: !audioOnly && format == "webm") { audioOnly = false; format = "webm" }
-                pill("MKV",  selected: !audioOnly && format == "mkv")  { audioOnly = false; format = "mkv" }
-                pill("MP3",  selected: audioOnly)                      { audioOnly = true;  format = "mp3" }
-            }
-
-            Spacer()
-
-            Button {
-                withAnimation(.spring(response: 0.3)) { showOptions.toggle() }
-            } label: {
-                Image(systemName: showOptions ? "slider.horizontal.3" : "slider.horizontal.3")
-                    .foregroundStyle(showOptions ? Color.red : .secondary)
-                    .font(.system(size: 15))
-            }
-            .buttonStyle(.plain)
-            .help("Opções")
-        }
-    }
-
-    private func pill(_ label: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label)
-                .font(.subheadline).fontWeight(selected ? .semibold : .regular)
-                .padding(.horizontal, 14).padding(.vertical, 7)
-                .background(selected ? Color.red : Color(.controlBackgroundColor))
-                .foregroundStyle(selected ? .white : .primary)
-                .clipShape(Capsule())
-                .animation(.easeInOut(duration: 0.15), value: selected)
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: - Options (expandable)
-
-    private var optionsExtra: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Divider()
-            HStack(spacing: 20) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("Categoria", systemImage: "folder.fill")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Picker("", selection: $category) {
-                        ForEach(categories, id: \.self) { Text($0) }
-                    }.pickerStyle(.menu).labelsHidden().frame(maxWidth: 140)
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("Nome do arquivo", systemImage: "pencil")
-                        .font(.caption).foregroundStyle(.secondary)
-                    TextField("Título do vídeo (padrão)", text: $customFilename)
-                        .textFieldStyle(.roundedBorder).frame(maxWidth: 200)
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("Legendas", systemImage: "text.quote")
-                        .font(.caption).foregroundStyle(.secondary)
-                    HStack {
-                        Toggle("", isOn: $subtitles).toggleStyle(.switch).tint(.red).labelsHidden()
-                        if subtitles {
-                            TextField("en,pt", text: $subLangs)
-                                .textFieldStyle(.roundedBorder).frame(maxWidth: 80).font(.caption)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - Download Button
-
-    private var downloadButton: some View {
-        HStack(spacing: 10) {
-            Button { startDownload() } label: {
-                HStack(spacing: 10) {
-                    if manager.isDownloading {
-                        ProgressView().controlSize(.small).tint(.white)
-                    } else {
-                        Image(systemName: "arrow.down.circle.fill").font(.title3)
-                    }
-                    Text(manager.isInstalling ? "Instalando..." : manager.isDownloading ? "Baixando..." : "Baixar")
-                        .font(.title3).fontWeight(.bold)
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 54)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.red)
-            .disabled(url.isEmpty || manager.isDownloading || manager.isInstalling)
-            .clipShape(RoundedRectangle(cornerRadius: 27))
-
-            if manager.isDownloading && !manager.isInstalling {
-                Button { manager.cancel() } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title2).foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Cancelar")
-            }
-        }
-    }
-
-    // MARK: - Progress Card
-
-    private var progressCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                HStack(spacing: 6) {
-                    if manager.isDownloading {
-                        ProgressView().controlSize(.mini)
-                    } else {
-                        Image(systemName: manager.progress >= 100
-                              ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                            .foregroundStyle(manager.progress >= 100 ? .green : .orange)
-                    }
-                    Text(manager.statusText).font(.subheadline).fontWeight(.medium)
-                }
-                Spacer()
-                Text("\(Int(manager.progress))%")
-                    .font(.title3).fontWeight(.bold).monospacedDigit()
-                    .foregroundStyle(.red)
-            }
-
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 4).fill(Color.red.opacity(0.15)).frame(height: 6)
-                    RoundedRectangle(cornerRadius: 4).fill(Color.red)
-                        .frame(width: geo.size.width * manager.progress / 100, height: 6)
-                        .animation(.linear(duration: 0.3), value: manager.progress)
-                }
-            }
-            .frame(height: 6)
-
-            if !manager.logLines.isEmpty {
-                DisclosureGroup {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(manager.logLines.suffix(12), id: \.self) { line in
-                                Text(line).font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                        }
-                    }.frame(maxHeight: 100)
-                } label: {
-                    Text("Log").font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        }
-        .padding(16)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-    }
-
-    // MARK: - History Grid
+    // MARK: - History
 
     private var historySection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Recentes")
-                    .font(.title2).fontWeight(.bold)
+                    .font(.title3).fontWeight(.bold)
                 Spacer()
-                Button { manager.clearHistory() } label: {
-                    Image(systemName: "trash").foregroundStyle(.secondary)
-                }.buttonStyle(.plain).help("Limpar histórico")
+                Button {
+                    manager.clearHistory()
+                } label: {
+                    Label("Limpar", systemImage: "trash")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Limpar histórico")
             }
+            .padding(.top, 8)
 
             LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 140, maximum: 175), spacing: 12)],
+                columns: [GridItem(.adaptive(minimum: 150, maximum: 190), spacing: 12)],
                 spacing: 12
             ) {
                 ForEach(manager.history) { item in
@@ -603,59 +603,63 @@ struct SingleDownloadView: View {
             NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: item.outputDir)
         } label: {
             VStack(alignment: .leading, spacing: 0) {
-                // Thumbnail
-                Group {
-                    if !item.thumbnailURL.isEmpty, let u = URL(string: item.thumbnailURL) {
-                        AsyncImage(url: u) { phase in
-                            switch phase {
-                            case .success(let img):
-                                img.resizable().aspectRatio(contentMode: .fill)
-                            default:
-                                thumbnailPlaceholder
-                            }
-                        }
-                    } else {
-                        thumbnailPlaceholder
-                    }
-                }
-                .frame(height: 84)
-                .frame(maxWidth: .infinity)
-                .clipped()
-                .clipShape(UnevenRoundedRectangle(
-                    topLeadingRadius: 12, bottomLeadingRadius: 0,
-                    bottomTrailingRadius: 0, topTrailingRadius: 12
-                ))
+                thumbnail(for: item.thumbnailURL, fallbackIcon: "film", fallbackColor: .secondary)
+                    .frame(height: 88)
+                    .frame(maxWidth: .infinity)
+                    .clipped()
 
-                // Info
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.title.isEmpty ? "Download" : item.title)
                         .font(.caption).fontWeight(.medium)
                         .lineLimit(2).multilineTextAlignment(.leading)
                         .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     HStack {
                         Text(item.category)
-                            .font(.caption2).foregroundStyle(.secondary)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
                         Spacer()
                         Button {
                             manager.history.removeAll { $0.id == item.id }
                         } label: {
-                            Image(systemName: "trash").font(.caption2).foregroundStyle(.quaternary)
-                        }.buttonStyle(.plain)
+                            Image(systemName: "trash")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.quaternary)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal, 10).padding(.vertical, 8)
             }
             .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 12))
-            .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
+            .overlay(RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
 
-    private var thumbnailPlaceholder: some View {
+    // MARK: - Shared thumbnail helper
+
+    @ViewBuilder
+    private func thumbnail(for urlString: String, fallbackIcon: String, fallbackColor: Color) -> some View {
+        if !urlString.isEmpty, let u = URL(string: urlString) {
+            AsyncImage(url: u) { phase in
+                if case .success(let img) = phase {
+                    img.resizable().aspectRatio(contentMode: .fill)
+                } else {
+                    thumbnailPlaceholder(icon: fallbackIcon, color: fallbackColor)
+                }
+            }
+        } else {
+            thumbnailPlaceholder(icon: fallbackIcon, color: fallbackColor)
+        }
+    }
+
+    private func thumbnailPlaceholder(icon: String, color: Color) -> some View {
         Rectangle()
-            .fill(Color(.separatorColor).opacity(0.35))
-            .overlay(Image(systemName: "film").foregroundStyle(.quaternary).font(.title2))
+            .fill(color.opacity(0.12))
+            .overlay(Image(systemName: icon).foregroundStyle(color.opacity(0.6)).font(.title3))
     }
 
     // MARK: - Actions

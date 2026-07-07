@@ -58,8 +58,15 @@ final class VideoInfoService: Sendable {
     // Procura yt-dlp: prefere versão instalada fresca, bundle como último recurso
     private var searchPaths: [String] {
         var paths: [String] = []
-        
-        // 1. Dentro do .app bundle (Resources/bin/)
+
+        // 1. Instalado pelo auto-installer do app
+        paths.append(NSHomeDirectory() + "/bin/yt-dlp")
+
+        // 2. Homebrew
+        paths.append("/usr/local/bin/yt-dlp")
+        paths.append("/opt/homebrew/bin/yt-dlp")
+
+        // 3. Dentro do .app bundle (Resources/bin/) — pode estar desatualizado
         if let resURL = Bundle.main.resourceURL {
             paths.append(resURL.appendingPathComponent("bin/yt-dlp").path)
         }
@@ -70,19 +77,12 @@ final class VideoInfoService: Sendable {
                 .appendingPathComponent("Resources/bin/yt-dlp")
             paths.append(appBin.path)
         }
-        
-        // 2. Instalado pelo usuário
-        paths.append(NSHomeDirectory() + "/bin/yt-dlp")
-        
-        // 3. Homebrew
-        paths.append("/usr/local/bin/yt-dlp")
-        paths.append("/opt/homebrew/bin/yt-dlp")
-        
+
         // 4. SPM bundle (quando roda via Xcode)
         if let resURL = Bundle.main.resourceURL {
             paths.append(resURL.appendingPathComponent("YToolMac_YToolMac.bundle/bin/yt-dlp").path)
         }
-        
+
         return paths
     }
 
