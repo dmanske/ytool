@@ -6,6 +6,7 @@ struct VideoInfo: Equatable {
     let duration: Int
     let thumbnail: String
     let formats: [VideoFormat]
+    let subtitleLangs: [String]   // legendas criadas pelo canal (não inclui automáticas)
 
     var durationFormatted: String {
         guard duration > 0 else { return "" }
@@ -147,7 +148,7 @@ final class VideoInfoService: Sendable {
         print("[VideoInfoService] Using yt-dlp at: \(ytdlp)")
         print("[VideoInfoService] Fetching info for: \(url)")
 
-        var arguments = ["--no-playlist", "--remote-components", "ejs:github"]
+        var arguments = ["--no-playlist", "--no-warnings", "--remote-components", "ejs:github"]
         if let browser = cookieBrowser, !browser.isEmpty {
             arguments += ["--cookies-from-browser", browser]
             print("[VideoInfoService] Using cookies from: \(browser)")
@@ -174,19 +175,40 @@ final class VideoInfoService: Sendable {
             throw VideoInfoError.fetchFailed(error.localizedDescription)
         }
 
-        // Run waitUntilExit on a background DispatchQueue — never on main thread
-        let (outData, exitCode): (Data, Int32) = try await withCheckedThrowingContinuation { cont in
+        // Rede de segurança: nunca deixa a análise pendurada pra sempre
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 30) {
+            if proc.isRunning {
+                print("[VideoInfoService] Timeout — terminating pid=\(proc.processIdentifier)")
+                proc.terminate()
+            }
+        }
+
+        // O JSON do -J pode passar de 1MB — muito maior que o buffer do pipe (64KB).
+        // É obrigatório drenar stdout/stderr ENQUANTO o processo roda; ler só depois
+        // do waitUntilExit trava os dois lados para sempre (deadlock).
+        let (outData, errData, exitCode): (Data, Data, Int32) = try await withCheckedThrowingContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
-                proc.waitUntilExit()
+                var stderrData = Data()
+                let errQueue = DispatchQueue(label: "ytool.fetch.stderr")
+                let errGroup = DispatchGroup()
+                errGroup.enter()
+                errQueue.async {
+                    stderrData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                    errGroup.leave()
+                }
+
+                // readDataToEndOfFile drena o pipe até EOF (bloqueia até o processo fechar o stdout)
                 let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-                cont.resume(returning: (data, proc.terminationStatus))
+                proc.waitUntilExit()
+                errGroup.wait()
+                cont.resume(returning: (data, stderrData, proc.terminationStatus))
             }
         }
 
         print("[VideoInfoService] Exit: \(exitCode), bytes: \(outData.count)")
 
         if exitCode != 0 {
-            let errStr = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let errStr = String(data: errData, encoding: .utf8) ?? ""
             throw VideoInfoError.fetchFailed(String(errStr.prefix(300)))
         }
 
@@ -204,6 +226,8 @@ final class VideoInfoService: Sendable {
         let uploader  = json["uploader"]  as? String ?? json["channel"] as? String ?? ""
         let duration  = json["duration"]  as? Int ?? Int(json["duration"] as? Double ?? 0)
         let thumbnail = json["thumbnail"] as? String ?? ""
+        let subtitleLangs = ((json["subtitles"] as? [String: Any]) ?? [:])
+            .keys.filter { $0 != "live_chat" }.sorted()
 
         var formats: [VideoFormat] = []
         for f in (json["formats"] as? [[String: Any]] ?? []) {
@@ -244,7 +268,8 @@ final class VideoInfoService: Sendable {
             return false
         }
 
-        return VideoInfo(title: title, uploader: uploader, duration: duration, thumbnail: thumbnail, formats: formats)
+        return VideoInfo(title: title, uploader: uploader, duration: duration, thumbnail: thumbnail,
+                         formats: formats, subtitleLangs: subtitleLangs)
     }
 
     private static func resLabel(_ h: Int) -> String? {

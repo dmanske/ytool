@@ -53,6 +53,7 @@ final class DownloadManager: ObservableObject {
     @Published var isInstalling = false
     @Published var dependenciesReady = false
     @Published var ytdlpVersion: String? = nil   // nil = not checked yet, "" = not found
+    @Published var isUpdatingYtdlp = false
 
     // Last completed download (for preview card)
     @Published var lastDownload: DownloadHistoryItem? = nil
@@ -83,6 +84,40 @@ final class DownloadManager: ObservableObject {
         loadHistory()
         checkAndAutoInstall()
         checkYtdlpVersion()
+        autoUpdateYtdlp()
+    }
+
+    // MARK: - Auto-update (yt-dlp standalone se atualiza sozinho com --update)
+
+    func autoUpdateYtdlp() {
+        let path = NSHomeDirectory() + "/bin/yt-dlp"
+        guard FileManager.default.isExecutableFile(atPath: path), !isUpdatingYtdlp else { return }
+        isUpdatingYtdlp = true
+        Task {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: path)
+            proc.arguments = ["--update"]
+            let pipe = Pipe()
+            proc.standardOutput = pipe
+            proc.standardError = pipe
+            do {
+                try proc.run()
+                let output: String = await withCheckedContinuation { cont in
+                    DispatchQueue.global(qos: .utility).async {
+                        proc.waitUntilExit()
+                        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                        cont.resume(returning: String(data: data, encoding: .utf8) ?? "")
+                    }
+                }
+                if output.contains("Updated yt-dlp to") {
+                    appendLog("✅ yt-dlp atualizado automaticamente")
+                }
+            } catch {
+                // Sem rede ou binário não suporta --update: segue com a versão atual
+            }
+            isUpdatingYtdlp = false
+            checkYtdlpVersion()
+        }
     }
 
     // MARK: - Version check (shows actual installed version)

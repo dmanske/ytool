@@ -45,8 +45,14 @@ struct SingleDownloadView: View {
     @State private var customFilename = ""
     @State private var subtitles = false
     @State private var subLangs = "en,pt"
-    @State private var showOptions = false
+    @State private var showOptions = true
     @FocusState private var urlFocused: Bool
+
+    // Video inspection (preview)
+    @State private var videoInfo: VideoInfo?
+    @State private var isInspecting = false
+    @State private var inspectError: String?
+    @State private var inspectTask: Task<Void, Never>?
 
     private let categories = [
         "Clips", "Música", "Tutoriais", "Filmes", "Séries",
@@ -85,6 +91,187 @@ struct SingleDownloadView: View {
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { urlFocused = true }
         }
+        .onChange(of: url) { _, newValue in
+            inspectURL(newValue)
+        }
+    }
+
+    // MARK: - Auto-inspect
+
+    private func inspectURL(_ raw: String) {
+        inspectTask?.cancel()
+        withAnimation(.spring(response: 0.3)) {
+            videoInfo = nil
+            inspectError = nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("http"), trimmed.count > 12 else {
+            isInspecting = false
+            return
+        }
+        inspectTask = Task {
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            isInspecting = true
+            defer { isInspecting = false }
+            do {
+                let info = try await VideoInfoService.shared.fetch(url: trimmed)
+                guard !Task.isCancelled else { return }
+                applyInfo(info)
+            } catch {
+                // Alguns links (Instagram, restritos) precisam de cookies do navegador
+                if let info = try? await VideoInfoService.shared.fetch(url: trimmed, cookieBrowser: detectDefaultBrowser()) {
+                    guard !Task.isCancelled else { return }
+                    applyInfo(info)
+                } else if !Task.isCancelled {
+                    withAnimation { inspectError = "Não foi possível analisar o link — o download ainda pode funcionar" }
+                }
+            }
+        }
+    }
+
+    private var maxHeight: Int {
+        videoInfo?.formats.filter { $0.kind != .audioOnly }.map(\.height).max() ?? 0
+    }
+
+    private var availableHeights: [Int] {
+        guard let info = videoInfo else { return [] }
+        return Set(info.formats.filter { $0.kind != .audioOnly }.map(\.height))
+            .filter { $0 >= 144 }
+            .sorted(by: >)
+    }
+
+    private func resLabel(_ h: Int) -> String {
+        if h >= 2160 { return "4K" }
+        if h >= 1440 { return "2K" }
+        return "\(h)p"
+    }
+
+    // Se a qualidade selecionada não existe neste vídeo, volta para "Melhor"
+    private func snapQualityToAvailable() {
+        guard maxHeight > 0, !audioOnly,
+              let required = ["2160p": 2160, "1440p": 1440, "1080p": 1080, "720p": 720, "480p": 480][quality],
+              required > maxHeight else { return }
+        quality = "best"
+    }
+
+    private func applyInfo(_ info: VideoInfo) {
+        withAnimation(.spring(response: 0.35)) { videoInfo = info }
+        manager.videoInfo = info
+        snapQualityToAvailable()
+
+        // Marca legendas automaticamente quando o vídeo tem legendas do canal
+        if info.subtitleLangs.isEmpty {
+            subtitles = false
+        } else {
+            subtitles = true
+            let preferred = info.subtitleLangs.filter { $0.hasPrefix("pt") || $0.hasPrefix("en") }
+            subLangs = (preferred.isEmpty ? Array(info.subtitleLangs.prefix(3)) : preferred)
+                .joined(separator: ",")
+        }
+    }
+
+    // Opções de qualidade: quando o vídeo foi analisado, só mostra o que existe de verdade
+    private var qualityOptions: [(String, String)] {
+        var opts: [(String, String)] = [(maxHeight > 0 ? "Melhor · \(resLabel(maxHeight))" : "Melhor", "best")]
+        for (label, h) in [("4K", 2160), ("2K", 1440), ("1080p", 1080), ("720p", 720), ("480p", 480)] {
+            if maxHeight == 0 || h <= maxHeight {
+                opts.append((label, "\(h)p"))
+            }
+        }
+        return opts
+    }
+
+    // MARK: - Preview Card
+
+    private func previewCard(_ info: VideoInfo) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            // Thumbnail with duration badge — click opens the video in the browser
+            Button {
+                if let u = URL(string: url.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                    NSWorkspace.shared.open(u)
+                }
+            } label: {
+                ZStack(alignment: .bottomTrailing) {
+                    thumbnail(for: info.thumbnail, fallbackIcon: "film", fallbackColor: .secondary)
+                        .frame(width: 210, height: 118)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 1))
+                        .overlay(
+                            Image(systemName: "play.circle.fill")
+                                .font(.system(size: 32))
+                                .foregroundStyle(.white.opacity(0.85))
+                                .shadow(radius: 4)
+                        )
+
+                    if !info.durationFormatted.isEmpty {
+                        Text(info.durationFormatted)
+                            .font(.system(size: 10, weight: .semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(Color.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 5))
+                            .padding(6)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .help("Assistir no navegador")
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(info.title.isEmpty ? "Vídeo" : info.title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .lineLimit(2)
+
+                if !info.uploader.isEmpty {
+                    Label(info.uploader, systemImage: "person.crop.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if !availableHeights.isEmpty {
+                    HStack(spacing: 6) {
+                        Text("DISPONÍVEL EM")
+                            .font(.system(size: 9, weight: .semibold))
+                            .tracking(0.5)
+                            .foregroundStyle(.tertiary)
+                        ForEach(availableHeights.prefix(5), id: \.self) { h in
+                            Text(resLabel(h))
+                                .font(.system(size: 10, weight: h == maxHeight ? .bold : .medium))
+                                .foregroundStyle(h == maxHeight ? .white : .secondary)
+                                .padding(.horizontal, 7).padding(.vertical, 3)
+                                .background(Capsule().fill(h == maxHeight ? YT.red : Color.primary.opacity(0.06)))
+                        }
+                    }
+                }
+
+                if maxHeight > 0 {
+                    Label("Melhor qualidade deste vídeo: \(resLabel(maxHeight))", systemImage: "sparkles")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if info.subtitleLangs.isEmpty {
+                    Label("Sem legendas do canal", systemImage: "captions.bubble")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    Label("Legendas: \(info.subtitleLangs.prefix(5).joined(separator: ", "))\(info.subtitleLangs.count > 5 ? "…" : "")",
+                          systemImage: "captions.bubble.fill")
+                        .font(.caption)
+                        .foregroundStyle(YT.red)
+                        .help("Este vídeo tem legendas — a opção Legendas foi marcada automaticamente")
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 13))
+        .overlay(RoundedRectangle(cornerRadius: 13)
+            .strokeBorder(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 1))
+        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
     private var backgroundView: some View {
@@ -119,12 +306,23 @@ struct SingleDownloadView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if let ver = manager.ytdlpVersion, !ver.isEmpty {
-                Label("yt-dlp \(ver)", systemImage: "checkmark.seal.fill")
+            if manager.isUpdatingYtdlp {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text("Atualizando motor…")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(Capsule().fill(Color.primary.opacity(0.05)))
+                .help("O yt-dlp (motor de download) está sendo atualizado para a versão mais recente")
+            } else if let ver = manager.ytdlpVersion, !ver.isEmpty {
+                Label("Motor \(ver)", systemImage: "checkmark.seal.fill")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 10).padding(.vertical, 5)
                     .background(Capsule().fill(Color.primary.opacity(0.05)))
+                    .help("yt-dlp \(ver) — o motor que baixa os vídeos. Ele se atualiza automaticamente sempre que você abre o app.")
             }
         }
         .padding(.bottom, 4)
@@ -136,21 +334,51 @@ struct SingleDownloadView: View {
         VStack(alignment: .leading, spacing: 18) {
             urlField
 
+            if let error = inspectError {
+                Label(error, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
+            if let info = videoInfo {
+                previewCard(info)
+            }
+
             VStack(alignment: .leading, spacing: 12) {
                 optionRow(label: "Qualidade") {
-                    ForEach([("Melhor", "best"), ("4K", "2160p"), ("1080p", "1080p"),
-                             ("720p", "720p"), ("480p", "480p")], id: \.1) { label, val in
-                        pill(label, selected: quality == val && !audioOnly) {
-                            quality = val
-                            audioOnly = false
-                        }
-                    }
+                    SegmentedPills(
+                        items: qualityOptions,
+                        selection: $quality,
+                        isActive: !audioOnly,
+                        onSelect: { _ in audioOnly = false }
+                    )
+                    .opacity(audioOnly ? 0.45 : 1)
                 }
                 optionRow(label: "Formato") {
-                    pill("MP4",  selected: !audioOnly && format == "mp4")  { audioOnly = false; format = "mp4" }
-                    pill("WebM", selected: !audioOnly && format == "webm") { audioOnly = false; format = "webm" }
-                    pill("MKV",  selected: !audioOnly && format == "mkv")  { audioOnly = false; format = "mkv" }
-                    pill("MP3",  selected: audioOnly, icon: "music.note")  { audioOnly = true;  format = "mp3" }
+                    SegmentedPills(
+                        items: [("MP4", "mp4"), ("WebM", "webm"), ("MKV", "mkv")],
+                        selection: $format,
+                        isActive: !audioOnly,
+                        onSelect: { _ in audioOnly = false }
+                    )
+
+                    // MP3 fica separado: é "só áudio", não um formato de vídeo
+                    Button {
+                        withAnimation(.spring(response: 0.28)) { audioOnly = true; format = "mp3" }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "music.note")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text("MP3 · só áudio")
+                        }
+                        .font(.system(size: 12, weight: audioOnly ? .semibold : .regular))
+                        .foregroundStyle(audioOnly ? .white : .primary)
+                        .padding(.horizontal, 13).padding(.vertical, 6)
+                        .background(Capsule().fill(audioOnly ? AnyShapeStyle(YT.gradient) : AnyShapeStyle(Color.primary.opacity(0.05))))
+                        .padding(3)
+                        .background(Capsule().fill(Color.primary.opacity(audioOnly ? 0.05 : 0)))
+                    }
+                    .buttonStyle(.plain)
 
                     Spacer()
 
@@ -196,6 +424,15 @@ struct SingleDownloadView: View {
                 .font(.system(size: 15))
                 .focused($urlFocused)
                 .onSubmit(startDownload)
+
+            if isInspecting {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Analisando…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             if !url.isEmpty {
                 Button { url = "" } label: {
@@ -244,19 +481,42 @@ struct SingleDownloadView: View {
         }
     }
 
-    private func pill(_ label: String, selected: Bool, icon: String? = nil, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                if let icon { Image(systemName: icon).font(.system(size: 10)) }
-                Text(label)
+    // Controle segmentado com indicador vermelho que desliza entre as opções
+    private struct SegmentedPills: View {
+        let items: [(String, String)]
+        @Binding var selection: String
+        var isActive: Bool = true
+        var onSelect: (String) -> Void = { _ in }
+        @Namespace private var ns
+
+        var body: some View {
+            HStack(spacing: 2) {
+                ForEach(items, id: \.1) { label, value in
+                    Button {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
+                            selection = value
+                        }
+                        onSelect(value)
+                    } label: {
+                        Text(label)
+                            .font(.system(size: 12, weight: selection == value && isActive ? .semibold : .regular))
+                            .foregroundStyle(selection == value && isActive ? .white : .primary)
+                            .padding(.horizontal, 13).padding(.vertical, 6)
+                            .background {
+                                if selection == value && isActive {
+                                    Capsule()
+                                        .fill(YT.gradient)
+                                        .matchedGeometryEffect(id: "indicator", in: ns)
+                                }
+                            }
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            .font(.system(size: 12, weight: selected ? .semibold : .regular))
-            .padding(.horizontal, 13).padding(.vertical, 6)
-            .background(Capsule().fill(selected ? YT.red : Color.primary.opacity(0.055)))
-            .foregroundStyle(selected ? .white : .primary)
-            .animation(.easeInOut(duration: 0.15), value: selected)
+            .padding(3)
+            .background(Capsule().fill(Color.primary.opacity(0.05)))
         }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Extra Options
