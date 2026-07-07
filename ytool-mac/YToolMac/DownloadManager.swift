@@ -85,6 +85,54 @@ final class DownloadManager: ObservableObject {
         checkAndAutoInstall()
         checkYtdlpVersion()
         autoUpdateYtdlp()
+        ensureDeno()
+    }
+
+    // MARK: - Deno (runtime JS que o yt-dlp usa para resolver o anti-bot do YouTube)
+
+    private func ensureDeno() {
+        let denoPath = NSHomeDirectory() + "/bin/deno"
+        let systemPaths = ["/usr/local/bin/deno", "/opt/homebrew/bin/deno"]
+        guard !FileManager.default.isExecutableFile(atPath: denoPath),
+              !systemPaths.contains(where: { FileManager.default.isExecutableFile(atPath: $0) })
+        else { return }
+
+        #if arch(arm64)
+        let zipURL = "https://github.com/denoland/deno/releases/latest/download/deno-aarch64-apple-darwin.zip"
+        #else
+        let zipURL = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-apple-darwin.zip"
+        #endif
+
+        Task {
+            guard let url = URL(string: zipURL) else { return }
+            do {
+                let binDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("bin")
+                try? FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+                let (tmp, _) = try await URLSession.shared.download(from: url)
+                let zipDest = binDir.appendingPathComponent("deno.zip")
+                try? FileManager.default.removeItem(at: zipDest)
+                try FileManager.default.moveItem(at: tmp, to: zipDest)
+
+                let unzip = Process()
+                unzip.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+                unzip.arguments = ["-o", zipDest.path, "-d", binDir.path]
+                unzip.standardOutput = Pipe(); unzip.standardError = Pipe()
+                try unzip.run()
+                await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                    DispatchQueue.global(qos: .utility).async {
+                        unzip.waitUntilExit()
+                        cont.resume()
+                    }
+                }
+                try? FileManager.default.removeItem(at: zipDest)
+                if FileManager.default.fileExists(atPath: denoPath) {
+                    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: denoPath)
+                    appendLog("✅ Runtime anti-bot (deno) instalado")
+                }
+            } catch {
+                // Sem rede: segue sem deno — só afeta vídeos que exigem verificação
+            }
+        }
     }
 
     // MARK: - Auto-update (yt-dlp standalone se atualiza sozinho com --update)
@@ -511,7 +559,19 @@ final class DownloadManager: ObservableObject {
             if history.count > 100 { history = Array(history.prefix(100)) }
             saveHistory()
         } else if statusText != "Cancelado" {
-            statusText = "❌ Erro (código \(exitCode))"
+            let recentLog = logLines.suffix(30).joined(separator: "\n")
+            if recentLog.contains("Sign in to confirm") {
+                statusText = "❌ O YouTube pediu verificação de login para este vídeo"
+                appendLog("💡 Saia e entre de novo na sua conta do YouTube no navegador padrão, depois tente novamente.")
+                appendLog("💡 Isso acontece com alguns vídeos específicos — não é um limite de downloads.")
+            } else if recentLog.contains("members-only") || recentLog.contains("Join this channel") {
+                statusText = "❌ Vídeo exclusivo para membros do canal"
+                appendLog("💡 É preciso ser membro do canal e estar logado no navegador padrão.")
+            } else if recentLog.contains("Video unavailable") {
+                statusText = "❌ Vídeo indisponível (removido ou privado)"
+            } else {
+                statusText = "❌ Erro (código \(exitCode))"
+            }
         }
     }
 
